@@ -168,7 +168,7 @@
     m.appendChild($("tplMain").content.cloneNode(true));
     mounted = true;
     $("q").addEventListener("input", debounce(function () { ST.q = $("q").value.trim().toUpperCase(); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); }, 200));
-    $("fSit").addEventListener("change", function () { ST.sit = $("fSit").value; ST.page = 0; renderTabs(); renderTable(); });
+    $("fSit").addEventListener("change", function () { ST.sit = $("fSit").value; ST.page = 0; refreshFilters(false); });
     $("fTipo").addEventListener("change", function () { ST.tipo = $("fTipo").value; ST.page = 0; renderTabs(); renderTable(); });
     $("btnCsv").addEventListener("click", exportXlsx);
     $("btnCsv").hidden = false;
@@ -252,21 +252,33 @@
     var box = $("kpis"); box.textContent = "";
     var A = aggFor(ST.cur.R.summary, ST.scope); if (!A) return;
     var pd = prevDocFor(), PA = aggFor(pd, ST.scope);
+    var only = onlyBand();
+    var act = null;
     function tile(cls, label, val, sub, dl, extra) {
-      box.appendChild(h("div", { cls: "kpi " + (cls || "") }, [h("div", { cls: "k-label" }, label), h("div", { cls: "k-val", text: val }), sub ? h("div", { cls: "k-sub", text: sub }) : null, extra || null, dl]));
+      var a = act; act = null;
+      var el = h("div", { cls: "kpi click " + (cls || ""), role: "button", tabindex: "0", "aria-pressed": a ? String(!!a.pressed) : null, title: a ? a.title : null,
+        onclick: a ? a.fn : null,
+        onkeydown: a ? function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); a.fn(); } } : null },
+        [h("div", { cls: "k-label" }, label), h("div", { cls: "k-val", text: val }), sub ? h("div", { cls: "k-sub", text: sub }) : null, extra || null, dl]);
+      box.appendChild(el);
     }
+    act = { fn: function () { goTab("prod", ""); }, pressed: ST.tab === "prod" && !only && !ST.sit, title: "Listar todos os produtos com similar" };
     tile("hero", ["Produtos com similar ≥ 70%"], n(A.comSim), "de " + n(A.prod) + " produtos ativos · " + pct(A.comSim, A.prod), delta(A.comSim, PA && PA.comSim, pd, true));
     BANDS.forEach(function (b) {
+      act = { fn: function () { goBand(b.k); }, pressed: only === b.k, title: only === b.k ? "Mostrar todas as faixas" : "Listar só " + b.label };
       tile("", [sw(b.color), b.label + " · " + b.name], n(A[b.k]), n(A.pairs[b.k]) + " pares de produtos", delta(A[b.k], PA && PA[b.k], pd, true));
     });
     var prot = A.S + A.P + A.R;
+    act = { fn: function () { goTab("prod", "prot"); }, pressed: ST.tab === "prod" && ST.sit === "prot", title: "Listar os produtos que não podem ser bloqueados" };
     tile("", ["Não bloquear"], n(prot), null, delta(prot, PA && (PA.S + PA.P + PA.R), pd, false),
       h("div", { cls: "flags" }, [
         h("span", null, [sw("var(--cS)"), "saldo " + n(A.fS)]),
         h("span", null, [sw("var(--cP)"), "previsão " + n(A.fP)]),
         h("span", null, [sw("var(--cR)"), "ponto de pedido " + n(A.fR)])]));
+    act = { fn: function () { goTab("cand", ""); }, pressed: ST.tab === "cand", title: "Listar os candidatos a bloqueio" };
     tile("", ["Candidatos a bloqueio"], n(A.L1 + A.L2), n(A.L1) + " com similar em uso · " + n(A.L2) + " com similar livre", delta(A.L1 + A.L2, PA && (PA.L1 + PA.L2), pd, true));
     var inat = A.inat || 0;
+    act = { fn: function () { goTab("inat", ""); }, pressed: ST.tab === "inat", title: "Listar os inativos (bloqueados)" };
     tile("", ["Inativos (bloqueados)"], n(inat), A.inatMov ? n(A.inatMov) + " ainda com saldo, previsão ou ponto de pedido — conferir" : "fora da análise de duplicidade",
       delta(inat, PA && PA.inat, pd, false));
   }
@@ -277,7 +289,7 @@
     var A = aggFor(ST.cur.R.summary, ST.scope); if (!A) return;
     var thead = h("tr", null, [h("th", { text: "Faixa" })].concat(SITS.map(function (x) { return h("th", null, [sw(x.color), x.label]); })).concat([h("th", { text: "Total" })]));
     var rows = BANDS.map(function (b) {
-      return h("tr", null, [h("td", { cls: "rowh" }, [sw(b.color), " " + b.label])].concat(SITS.map(function (x) {
+      return h("tr", { style: ST.bands[b.k] ? null : "opacity:.4" }, [h("td", { cls: "rowh" }, [sw(b.color), " " + b.label])].concat(SITS.map(function (x) {
         var v = A.m[b.k][x.k];
         return h("td", null, [h("button", { cls: "cell" + (v ? "" : " zero"), type: "button", "aria-label": b.label + ", " + x.label + ": " + v, text: n(v),
           onclick: function () { goList(b.k, x.k); } })]);
@@ -290,8 +302,30 @@
     ST.tab = "prod"; store("tab", "prod");
     ST.bands = { b95: bk === "b95", b75: bk === "b75", b70: bk === "b70" };
     ST.sit = sk; ST.page = 0; ST.expanded = null;
-    renderTabs(); renderTable();
-    $("pTables").scrollIntoView({ behavior: "smooth", block: "start" });
+    refreshFilters(true);
+  }
+  function onlyBand() {
+    var on = BANDS.filter(function (b) { return ST.bands[b.k]; });
+    return on.length === 1 ? on[0].k : null;
+  }
+  // Clique num indicador de faixa: lista só aquela faixa (clicar de novo volta para todas)
+  function goBand(bk) {
+    if (onlyBand() === bk) ST.bands = { b95: true, b75: true, b70: true };
+    else ST.bands = { b95: bk === "b95", b75: bk === "b75", b70: bk === "b70" };
+    // a lista mostra o mesmo total do indicador: todos os produtos daquela faixa
+    if (ST.tab === "inat" || ST.tab === "saldo") { ST.tab = "prod"; ST.sit = ""; store("tab", "prod"); }
+    ST.page = 0; ST.expanded = null;
+    refreshFilters(true);
+  }
+  function goTab(tab, sit) {
+    ST.tab = tab; store("tab", tab); ST.sit = sit || "";
+    ST.bands = { b95: true, b75: true, b70: true };
+    ST.page = 0; ST.expanded = null;
+    refreshFilters(true);
+  }
+  function refreshFilters(scroll) {
+    renderKpis(); renderMatrix(); renderTabs(); renderTable();
+    if (scroll) $("pTables").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   // ---------- charts ----------
@@ -458,7 +492,7 @@
       if (!inS(i) || !ST.bands[I.band[i]]) continue;
       if (tab === "saldo" && I.saldo[i] === 0) continue;
       if (tab === "cand" && I.prot[i]) continue;
-      if (sit && tab !== "saldo" && I.cat[i] !== sit) continue;
+      if (sit && tab !== "saldo") { if (sit === "prot") { if (!I.prot[i]) continue; } else if (I.cat[i] !== sit) continue; }
       if (ST.tipo && P[i][3] !== ST.tipo) continue;
       if (ST.q && cur.search[i].indexOf(ST.q) < 0) continue;
       out.push(i);
@@ -509,21 +543,21 @@
     var box = $("tabs"); box.textContent = "";
     TABS.forEach(function (t) {
       box.appendChild(h("button", { cls: "tab", role: "tab", type: "button", "aria-selected": String(ST.tab === t.k),
-        onclick: function () { if (ST.tab !== t.k) ST.sit = ""; ST.tab = t.k; store("tab", t.k); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); } },
+        onclick: function () { if (ST.tab !== t.k) ST.sit = ""; ST.tab = t.k; store("tab", t.k); ST.page = 0; ST.expanded = null; refreshFilters(false); } },
         [t.label, h("span", { cls: "cnt", text: n(countFor(t.k)) })]));
     });
     // band toggles
     var bt = $("bandToggles"); bt.textContent = ""; bt.hidden = ST.tab === "inat";
     BANDS.forEach(function (b) {
       bt.appendChild(h("button", { cls: "chip-toggle", type: "button", "aria-pressed": String(!!ST.bands[b.k]),
-        onclick: function () { ST.bands[b.k] = !ST.bands[b.k]; ST.page = 0; renderTabs(); renderTable(); } }, [sw(b.color), b.label]));
+        onclick: function () { ST.bands[b.k] = !ST.bands[b.k]; ST.page = 0; refreshFilters(false); } }, [sw(b.color), b.label]));
     });
     // situação select
     var fs = $("fSit"); fs.textContent = "";
     var opts;
     if (ST.tab === "pares") opts = [["", "Todos os pares"], ["one", "Um com movimento, outro livre"], ["none", "Nenhum com movimento"], ["both", "Ambos com movimento"]];
     else if (ST.tab === "cand") opts = [["", "Todos os candidatos"], ["L1", SIT.L1.label], ["L2", SIT.L2.label]];
-    else if (ST.tab === "prod") opts = [["", "Todas as situações"]].concat(SITS.map(function (x) { return [x.k, x.label]; }));
+    else if (ST.tab === "prod") opts = [["", "Todas as situações"], ["prot", "Não bloquear (saldo, previsão ou PP)"]].concat(SITS.map(function (x) { return [x.k, x.label]; }));
     else if (ST.tab === "inat") opts = [["", "Todos os inativos"], ["mov", "Ainda com saldo, previsão ou PP"], ["sem", "Sem movimento"]];
     else opts = null;
     fs.hidden = !opts;
@@ -537,7 +571,8 @@
     ST.cur.tipos.forEach(function (t) { ft.appendChild(h("option", { value: t, text: "Tipo " + t })); });
     if (ST.cur.tipos.indexOf(ST.tipo) < 0) ST.tipo = "";
     ft.value = ST.tipo;
-    $("tblSub").textContent = "Escopo: " + scopeName(ST.scope) + ". Clique num produto para ver todos os similares.";
+    var fx = BANDS.filter(function (b) { return ST.bands[b.k]; }).map(function (b) { return b.label; });
+    $("tblSub").textContent = "Escopo: " + scopeName(ST.scope) + (ST.tab !== "inat" && fx.length < 3 ? " · Faixa: " + (fx.length ? fx.join(", ") : "nenhuma") : "") + ". Clique num produto para ver todos os similares.";
   }
   function prodCell(i, compact) {
     var cur = ST.cur, p = cur.D.P[i];
