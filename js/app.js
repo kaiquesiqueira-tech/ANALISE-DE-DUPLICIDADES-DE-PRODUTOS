@@ -129,7 +129,9 @@
   function setCurrent(obj, isPreview) {
     obj.R = DupAnalysis.summarize(obj.D);
     buildAdj(obj);
-    obj.tipos = Array.from(new Set(obj.D.P.map(function (p) { return p[3]; }).filter(Boolean))).sort();
+    obj.D.I = obj.D.I || [];
+    obj.tipos = Array.from(new Set(obj.D.P.concat(obj.D.I).map(function (p) { return p[3]; }).filter(Boolean))).sort();
+    obj.inSearch = obj.D.I.map(function (p) { return (p[1] + " " + p[2]).toUpperCase(); });
     obj.search = obj.D.P.map(function (p) { return (p[1] + " " + p[2]).toUpperCase(); });
     obj.filIndex = {}; obj.D.filiais.forEach(function (f, i) { obj.filIndex[f] = i; });
     if (isPreview) { ST.preview = obj; } else { ST.saved = obj; }
@@ -270,6 +272,9 @@
         h("span", null, [sw("var(--cP)"), "previsão " + n(A.fP)]),
         h("span", null, [sw("var(--cR)"), "ponto de pedido " + n(A.fR)])]));
     tile("", ["Candidatos a bloqueio"], n(A.L1 + A.L2), n(A.L1) + " com similar em uso · " + n(A.L2) + " com similar livre", delta(A.L1 + A.L2, PA && (PA.L1 + PA.L2), pd, true));
+    var inat = A.inat || 0;
+    tile("", ["Inativos (bloqueados)"], n(inat), A.inatMov ? n(A.inatMov) + " ainda com saldo, previsão ou ponto de pedido — conferir" : "fora da análise de duplicidade",
+      delta(inat, PA && PA.inat, pd, false));
   }
 
   // ---------- matrix ----------
@@ -430,7 +435,8 @@
       if (!p.A) { showTip(dt(p.at, true), [{ label: "Sem dados para " + scopeName(ST.scope), value: "" }], ev); return; }
       showTip((p.preview ? "Prévia · " : "") + dt(p.at, true), SER.map(function (sr) { return { color: sr.color, label: sr.label, value: n(p.A[sr.k]) }; }).concat([
         { label: "Não bloquear", value: n(p.A.S + p.A.P + p.A.R) },
-        { label: "Candidatos a bloqueio", value: n(p.A.L1 + p.A.L2) }]), ev);
+        { label: "Candidatos a bloqueio", value: n(p.A.L1 + p.A.L2) },
+        { label: "Inativos (bloqueados)", value: p.A.inat == null ? "–" : n(p.A.inat) }]), ev);
     });
     hit.addEventListener("mouseleave", function () { cross.setAttribute("visibility", "hidden"); hideTip(); });
     svg.appendChild(hit);
@@ -442,7 +448,8 @@
     { k: "saldo", label: "Com saldo e similar" },
     { k: "cand", label: "Candidatos a bloqueio" },
     { k: "prod", label: "Todos os produtos" },
-    { k: "pares", label: "Pares" }
+    { k: "pares", label: "Pares" },
+    { k: "inat", label: "Inativos (bloqueados)" }
   ];
   function inScopeFn() {
     var sc = ST.scope, P = ST.cur.D.P;
@@ -484,21 +491,35 @@
     out.sort(function (x, y) { return pr[y + 2] - pr[x + 2] || (P[pr[x]][1] < P[pr[y]][1] ? -1 : 1); });
     return out;
   }
-  function currentList() { return ST.tab === "pares" ? pairList(ST.sit) : productList(ST.tab, ST.sit); }
-  function countFor(tab) {
-    var sit = tab === ST.tab ? ST.sit : "";
-    return tab === "pares" ? pairList(sit).length : productList(tab, sit).length;
+  function inactiveList(sit) {
+    var cur = ST.cur, IN = cur.D.I, X = cur.R.inat, sc = ST.scope, out = [];
+    var emp = sc.slice(0, 2) === "e:" ? sc.slice(2) : null, fi = sc.slice(0, 2) === "f:" ? cur.filIndex[sc.slice(2)] : null;
+    for (var i = 0; i < IN.length; i++) {
+      if (emp && IN[i][0] !== emp) continue;
+      if (fi != null && (IN[i][7] || []).indexOf(fi) < 0) continue;
+      var mov = X.saldo[i] !== 0 || X.prev[i] > 0 || X.pp[i] > 0;
+      if ((sit === "mov" && !mov) || (sit === "sem" && mov)) continue;
+      if (ST.tipo && IN[i][3] !== ST.tipo) continue;
+      if (ST.q && cur.inSearch[i].indexOf(ST.q) < 0) continue;
+      out.push(i);
+    }
+    function m(i) { return X.saldo[i] !== 0 || X.prev[i] > 0 || X.pp[i] > 0 ? 1 : 0; }
+    out.sort(function (a, b) { return m(b) - m(a) || (IN[a][1] < IN[b][1] ? -1 : 1); });
+    return out;
   }
+  function listFor(tab, sit) { return tab === "pares" ? pairList(sit) : tab === "inat" ? inactiveList(sit) : productList(tab, sit); }
+  function currentList() { return listFor(ST.tab, ST.sit); }
+  function countFor(tab) { return listFor(tab, tab === ST.tab ? ST.sit : "").length; }
 
   function renderTabs() {
     var box = $("tabs"); box.textContent = "";
     TABS.forEach(function (t) {
       box.appendChild(h("button", { cls: "tab", role: "tab", type: "button", "aria-selected": String(ST.tab === t.k),
-        onclick: function () { if (t.k === "pares" || ST.tab === "pares") ST.sit = ""; ST.tab = t.k; store("tab", t.k); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); } },
+        onclick: function () { if (ST.tab !== t.k) ST.sit = ""; ST.tab = t.k; store("tab", t.k); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); } },
         [t.label, h("span", { cls: "cnt", text: n(countFor(t.k)) })]));
     });
     // band toggles
-    var bt = $("bandToggles"); bt.textContent = "";
+    var bt = $("bandToggles"); bt.textContent = ""; bt.hidden = ST.tab === "inat";
     BANDS.forEach(function (b) {
       bt.appendChild(h("button", { cls: "chip-toggle", type: "button", "aria-pressed": String(!!ST.bands[b.k]),
         onclick: function () { ST.bands[b.k] = !ST.bands[b.k]; ST.page = 0; renderTabs(); renderTable(); } }, [sw(b.color), b.label]));
@@ -509,6 +530,7 @@
     if (ST.tab === "pares") opts = [["", "Todos os pares"], ["one", "Um com movimento, outro livre"], ["none", "Nenhum com movimento"], ["both", "Ambos com movimento"]];
     else if (ST.tab === "cand") opts = [["", "Todos os candidatos"], ["L1", SIT.L1.label], ["L2", SIT.L2.label]];
     else if (ST.tab === "prod") opts = [["", "Todas as situações"]].concat(SITS.map(function (x) { return [x.k, x.label]; }));
+    else if (ST.tab === "inat") opts = [["", "Todos os inativos"], ["mov", "Ainda com saldo, previsão ou PP"], ["sem", "Sem movimento"]];
     else opts = null;
     fs.hidden = !opts;
     if (opts) {
@@ -577,7 +599,27 @@
     if (ST.page >= pages) ST.page = pages - 1;
     var slice = list.slice(ST.page * PAGE, ST.page * PAGE + PAGE);
     var head, body = h("tbody");
-    if (ST.tab === "pares") {
+    if (ST.tab === "inat") {
+      var IN = ST.cur.D.I, X = ST.cur.R.inat, DD = ST.cur.D;
+      head = ["Produto", "Situação", "Motivo", "O que fazer"];
+      slice.forEach(function (i) {
+        var p = IN[i], tags = [];
+        if (X.saldo[i] !== 0) tags.push(h("span", { cls: "tag" }, [sw("var(--cS)"), "Saldo " + QF.format(X.saldo[i])]));
+        if (X.prev[i] > 0) tags.push(h("span", { cls: "tag" }, [sw("var(--cP)"), "Prev. chegada " + QF.format(X.prev[i])]));
+        if (X.pp[i] > 0) tags.push(h("span", { cls: "tag" }, [sw("var(--cR)"), "Ponto pedido " + QF.format(X.pp[i])]));
+        var mov = tags.length > 0;
+        if (!mov) tags.push(h("span", { cls: "tag free", text: "Sem saldo, previsão ou PP" }));
+        var fil = (p[7] || []).length ? "Filiais: " + p[7].map(function (fi) { return DD.filiais[fi]; }).join(" · ") : "Sem registro nas filiais";
+        var meta = [p[3] ? "Tipo " + p[3] : "", p[5], p[4] ? "Grupo " + p[4] : "", "Emp. " + p[0]].filter(Boolean).join(" · ");
+        body.appendChild(h("tr", null, [
+          h("td", null, [h("span", { cls: "p-cod", text: p[1] }), h("span", { cls: "p-desc", text: p[2] }), h("span", { cls: "p-meta", text: meta })]),
+          h("td", null, [h("div", { cls: "tags" }, tags), h("span", { cls: "p-meta", text: fil })]),
+          h("td", { text: p[9] || "Bloqueado" }),
+          h("td", null, [mov ? h("div", { cls: "act warn" }, [h("strong", { text: "Conferir" }), h("span", { cls: "p-meta", text: "está inativo, mas ainda tem movimento" })])
+            : h("div", { cls: "act keep" }, [h("strong", { text: "Ok" }), h("span", { cls: "p-meta", text: "bloqueado e sem movimento" })])])
+        ]));
+      });
+    } else if (ST.tab === "pares") {
       head = ["Similaridade", "Produto A", "Produto B", "Sugestão"];
       slice.forEach(function (k) {
         var a = pr[k], b = pr[k + 1], sg = pairSuggestion(a, b);
@@ -612,7 +654,7 @@
         }
       });
     }
-    tbl.appendChild(h("thead", null, [h("tr", null, head.map(function (x, j) { return h("th", { cls: (ST.tab !== "pares" && j === 3) ? "r" : null, text: x }); }))]));
+    tbl.appendChild(h("thead", null, [h("tr", null, head.map(function (x, j) { return h("th", { cls: (ST.tab !== "pares" && ST.tab !== "inat" && j === 3) ? "r" : null, text: x }); }))]));
     if (!slice.length) body.appendChild(h("tr", null, [h("td", { colspan: String(head.length), cls: "empty", text: "Nenhum item com estes filtros." })]));
     tbl.appendChild(body);
     var pg = $("pager"); pg.textContent = "";
@@ -630,7 +672,15 @@
   async function exportCsv() {
     if (!ST.cur) return;
     var list = currentList(), I = ST.cur.R.info, P = ST.cur.D.P, pr = ST.cur.D.pairs, D = ST.cur.D, lines = [];
-    if (ST.tab === "pares") {
+    if (ST.tab === "inat") {
+      var X = ST.cur.R.inat;
+      lines.push(["Empresa", "Código", "Descrição", "Tipo", "Grupo", "UM", "Motivo", "Saldo", "Previsão de chegada", "Ponto de pedido", "Filiais"].join(";"));
+      list.forEach(function (i) {
+        var p = D.I[i];
+        lines.push([p[0], p[1], p[2], p[3], p[4], p[5], p[9] || "Bloqueado", numBR(X.saldo[i]), numBR(X.prev[i]), numBR(X.pp[i]),
+          (p[7] || []).map(function (fi) { return D.filiais[fi]; }).join(" ")].map(csvCell).join(";"));
+      });
+    } else if (ST.tab === "pares") {
       lines.push(["Empresa", "Similaridade %", "Faixa", "Código A", "Descrição A", "Situação A", "Código B", "Descrição B", "Situação B", "Sugestão"].join(";"));
       list.forEach(function (k) {
         var a = pr[k], b = pr[k + 1], sg = pairSuggestion(a, b);
@@ -645,7 +695,7 @@
           P[i][7].map(function (fi) { return D.filiais[fi]; }).join(" ")].map(csvCell).join(";"));
       });
     }
-    var tabName = { saldo: "com_saldo", cand: "candidatos_bloqueio", prod: "produtos", pares: "pares" }[ST.tab];
+    var tabName = { saldo: "com_saldo", cand: "candidatos_bloqueio", prod: "produtos", pares: "pares", inat: "inativos" }[ST.tab];
     var scopeTag = ST.scope === "all" ? "todas" : ST.scope.replace(":", "_");
     Armazem.baixar("duplicidade_" + tabName + "_" + scopeTag + "_" + D.at.slice(0, 10) + ".csv", "\uFEFF" + lines.join("\r\n"), "text/csv;charset=utf-8");
   }
@@ -679,7 +729,7 @@
           await recarregar();
         } }));
       box.appendChild(h("div", { cls: "h" }, [h("strong", { cls: "num", text: dt(d.at, true) }),
-        h("span", { cls: "muted", text: n(A.comSim) + " com similar · " + n(A.b95) + " em 95–100% · " + n((A.L1 || 0) + (A.L2 || 0)) + " candidatos · " + (d.origem === "local" ? "só neste navegador" : "no GitHub") }),
+        h("span", { cls: "muted", text: n(A.comSim) + " com similar · " + n(A.b95) + " em 95–100% · " + n((A.L1 || 0) + (A.L2 || 0)) + " candidatos · " + (A.inat != null ? n(A.inat) + " inativos · " : "") + (d.origem === "local" ? "só neste navegador" : "no GitHub") }),
         h("div", { cls: "actions" }, acts)]));
     });
   }

@@ -17,7 +17,8 @@ var DupAnalysis = (function () {
       filial: ["filial", "b1_filial"], cod: ["codigo", "b1_cod", "cod. produto", "produto"],
       desc: ["descricao", "b1_desc", "desc. produto"], tipo: ["tipo", "b1_tipo"], grupo: ["grupo", "b1_grupo"],
       um: ["unidade", "b1_um"], ucom: ["ult. compra", "b1_ucom"],
-      blq: ["bloqueado", "blq. de tela", "blq.de tela", "b1_msblql", "bloqueio", "bloqueado?"] } },
+      blq: ["bloqueado", "blq. de tela", "blq.de tela", "b1_msblql", "bloqueio", "bloqueado?"],
+      ativo: ["ativo", "b1_ativo", "ativo?"] } },
     SBZ: { label: "SBZ · Indicadores (ponto de pedido)", need: ["cod", "pp"], cols: {
       filial: ["filial", "bz_filial"], cod: ["codigo", "bz_cod", "produto"], pp: ["ponto pedido", "bz_emin"] } },
     SB2: { label: "SB2 · Saldo físico", need: ["cod", "saldo"], cols: {
@@ -73,6 +74,11 @@ var DupAnalysis = (function () {
     var s = normLabel(v);
     return s === "1" || s === "sim" || s === "s" || s === "bloqueado" || s === "true";
   }
+  // B1_ATIVO = N (não ativo) também conta como bloqueado. Vazio = ativo.
+  function isInactive(v) {
+    var s = normLabel(v);
+    return s === "n" || s === "nao" || s === "2" || s === "false" || s === "inativo";
+  }
 
   // Reads one file; returns {kind, label, name, rows, data}
   async function readTable(blob, name, onProgress) {
@@ -118,7 +124,8 @@ var DupAnalysis = (function () {
     };
     await XlsxStream.read(blob, name, visitor, onProgress);
     if (!kind) return { kind: null, name: name, rows: 0, error: "Não reconheci esta planilha (esperava SB1, SBZ ou SB2/Saldo físico)." };
-    return { kind: kind, label: SPECS[kind].label, name: name, rows: rows, data: data, hasBlq: kind === "SB1" && map.blq >= 0 };
+    return { kind: kind, label: SPECS[kind].label, name: name, rows: rows, data: data,
+      hasBlq: kind === "SB1" && map.blq >= 0, hasAtivo: kind === "SB1" && map.ativo >= 0 };
   }
 
   // tables: array of readTable results. runJoin(strings, T, onProgress) -> Promise<{a,b,s,n}>
@@ -166,7 +173,8 @@ var DupAnalysis = (function () {
 
     // products
     onStep("Montando cadastro de produtos");
-    var prods = [], seen = new Set(), excl = { bloqueados: 0, semDescricao: 0, repetidos: 0 };
+    var prods = [], seen = new Set(), excl = { bloqueados: 0, inativos: 0, semDescricao: 0, repetidos: 0 };
+    var inativos = [], seenInat = new Set();
     var descSource = sb1.length ? "SB1" : "SB2";
     if (sb1.length) {
       sb1.forEach(function (t) {
@@ -180,7 +188,18 @@ var DupAnalysis = (function () {
             var c9 = ("000000000" + cod).slice(-9), c8 = ("00000000" + cod).slice(-8);
             if (ks && ks.has(cod)) { /* keep */ } else if (ks && ks.has(c9)) cod = c9; else if (ks && ks.has(c8)) cod = c8; else cod = c9;
           }
-          if (d.blq && isBlocked(d.blq[i])) { excl.bloqueados++; continue; }
+          var bloq = d.blq && isBlocked(d.blq[i]), inat = d.ativo && isInactive(d.ativo[i]);
+          if (bloq || inat) {
+            if (bloq) excl.bloqueados++; else excl.inativos++;
+            if (!seenInat.has(emp + "|" + cod)) {
+              seenInat.add(emp + "|" + cod);
+              inativos.push({ emp: emp, cod: cod, desc: String(d.desc[i] == null ? "" : d.desc[i]).trim(),
+                tipo: d.tipo ? String(d.tipo[i]).trim() : "", grupo: d.grupo ? cleanCode(d.grupo[i]) : "",
+                um: d.um ? String(d.um[i]).trim() : "", ucom: d.ucom ? parseDate(d.ucom[i]) : "",
+                motivo: bloq ? "Bloqueado" : "Ativo = N" });
+            }
+            continue;
+          }
           var key = emp + "|" + cod;
           if (seen.has(key)) { excl.repetidos++; continue; }
           seen.add(key);
@@ -260,13 +279,24 @@ var DupAnalysis = (function () {
       });
       P[pi] = [p.emp, p.cod, p.desc, p.tipo, p.grupo, p.um, p.ucom, pres, st];
     });
+    function rowOf(p) {
+      var pres = [], st = [], m = stockOf(p);
+      if (m) m.forEach(function (v, f) {
+        var fi = filIdx[f];
+        if (fi == null) return;
+        pres.push(fi);
+        if (v[0] || v[1] || v[2]) st.push([fi, round3(v[0]), round3(v[1]), round3(v[2])]);
+      });
+      return [p.emp, p.cod, p.desc, p.tipo, p.grupo, p.um, p.ucom, pres, st, p.motivo];
+    }
+    var INAT = inativos.map(rowOf);
     return {
-      v: 1, T: T_MIN, at: new Date().toISOString(), descSource: descSource,
+      v: 2, T: T_MIN, at: new Date().toISOString(), descSource: descSource,
       files: tables.map(function (t) { return { name: t.name, kind: t.kind, rows: t.rows }; }),
       empresas: empresas, filiais: filiais,
       totals: { prodPorEmp: prodPorEmp, prodPorFilial: prodPorFilial, excl: excl,
-        hasBlq: sb1.some(function (t) { return t.hasBlq; }) },
-      P: P, pairs: pairsOut
+        hasBlq: sb1.some(function (t) { return t.hasBlq; }), hasAtivo: sb1.some(function (t) { return t.hasAtivo; }) },
+      P: P, pairs: pairsOut, I: INAT
     };
   }
   function round3(x) { return Math.round(x * 1000) / 1000; }
@@ -297,7 +327,7 @@ var DupAnalysis = (function () {
     }
     function agg(prod) {
       return { prod: prod || 0, comSim: 0, b95: 0, b75: 0, b70: 0, S: 0, P: 0, R: 0, L1: 0, L2: 0,
-        fS: 0, fP: 0, fR: 0,
+        fS: 0, fP: 0, fR: 0, inat: 0, inatMov: 0,
         m: { b95: { S: 0, P: 0, R: 0, L1: 0, L2: 0 }, b75: { S: 0, P: 0, R: 0, L1: 0, L2: 0 }, b70: { S: 0, P: 0, R: 0, L1: 0, L2: 0 } },
         pairs: { b95: 0, b75: 0, b70: 0 } };
     }
@@ -322,6 +352,16 @@ var DupAnalysis = (function () {
       var pres = D.P[i][7];
       for (j = 0; j < pres.length; j++) add(S.fil[D.filiais[pres[j]]], b, c, i);
     }
+    // produtos inativos / bloqueados (fora da comparação)
+    var IN = D.I || [], inSaldo = new Float64Array(IN.length), inPrev = new Float64Array(IN.length), inPP = new Float64Array(IN.length);
+    for (i = 0; i < IN.length; i++) {
+      var sti = IN[i][8] || [];
+      for (j = 0; j < sti.length; j++) { inSaldo[i] += sti[j][1]; inPrev[i] += sti[j][2]; inPP[i] = Math.max(inPP[i], sti[j][3]); }
+      var mov = inSaldo[i] !== 0 || inPrev[i] > 0 || inPP[i] > 0 ? 1 : 0;
+      S.g.inat++; S.g.inatMov += mov;
+      if (S.emp[IN[i][0]]) { S.emp[IN[i][0]].inat++; S.emp[IN[i][0]].inatMov += mov; }
+      (IN[i][7] || []).forEach(function (fi) { var A = S.fil[D.filiais[fi]]; if (A) { A.inat++; A.inatMov += mov; } });
+    }
     for (k = 0; k < pr.length; k += 3) {
       var pb = bandOf(pr[k + 2]), ea = D.P[pr[k]][0];
       S.g.pairs[pb]++;
@@ -333,13 +373,14 @@ var DupAnalysis = (function () {
     }
     return {
       info: { best: best, bestP: bestP, cnt: cnt, saldo: saldo, prev: prev, pp: pp, prot: prot, cat: cat, band: band },
+      inat: { saldo: inSaldo, prev: inPrev, pp: inPP },
       summary: S
     };
   }
 
   function snapshotDoc(D, S, extra) {
     var o = { at: D.at, T: D.T, descSource: D.descSource, files: D.files, empresas: D.empresas, filiais: D.filiais,
-      excl: D.totals.excl, hasBlq: D.totals.hasBlq, g: S.g, emp: S.emp, fil: S.fil };
+      excl: D.totals.excl, hasBlq: D.totals.hasBlq, hasAtivo: !!D.totals.hasAtivo, g: S.g, emp: S.emp, fil: S.fil };
     if (extra) for (var k in extra) o[k] = extra[k];
     return o;
   }

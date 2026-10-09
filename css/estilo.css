@@ -155,6 +155,7 @@ table.t { border-collapse: collapse; width: 100%; min-width: 900px; font-size: 1
 .act strong { font-weight: 600; }
 .act.block { color: var(--bad); }
 .act.keep { color: var(--ink-2); }
+.act.warn { color: var(--warn); }
 .pager { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--ink-2); }
 .expand td { background: var(--surface-2); }
 .sims { display: grid; gap: 6px; }

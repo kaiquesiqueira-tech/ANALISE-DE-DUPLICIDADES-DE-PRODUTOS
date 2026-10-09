@@ -115,6 +115,7 @@
       <p>A similaridade é a parte em comum das duas descrições, de 0 a 100%. Quando as duas têm medidas ou códigos (palavras com números) e eles são diferentes, a similaridade cai: “BOTINA CA-42374 Nº37” e “Nº38” são produtos diferentes e não entram como duplicidade.</p>
       <p>Faixas: <strong>95–100%</strong> provável duplicidade · <strong>75–94%</strong> alta semelhança, conferir · <strong>70–74%</strong> semelhança fraca. Abaixo de 70% o par não aparece.</p>
       <p>Situação do produto: <strong>com saldo</strong> (saldo atual diferente de zero no SB2), <strong>previsão de chegada</strong> (Qtd. prevista no SB2 maior que zero), <strong>ponto de pedido</strong> (SBZ maior que zero). Qualquer um deles = não bloquear. Os demais são candidatos: “similar em uso” quando o similar tem saldo, previsão ou ponto de pedido (bloqueie este e mantenha o similar), ou “similar também livre” (escolha qual manter).</p>
+      <p>Inativos: produto da SB1 com <strong>Ativo = N</strong> (ou Bloqueado = Sim, quando a coluna vier na exportação) é tratado como bloqueado. Ele sai da comparação e aparece separado na aba “Inativos (bloqueados)”. Se ainda tiver saldo, previsão de chegada ou ponto de pedido, fica marcado para conferir.</p>
       <p>Filial: o produto conta na filial quando tem registro no Saldo Físico ou na SBZ daquela filial.</p>
       <p>Onde ficam os dados: as medições publicadas estão na pasta <code>dados/</code> do repositório. Uma medição salva e ainda não enviada ao GitHub fica só no navegador de quem a gerou.</p>
     </div>
