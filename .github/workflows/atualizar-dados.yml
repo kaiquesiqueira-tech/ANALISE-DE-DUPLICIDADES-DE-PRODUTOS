@@ -1,0 +1,48 @@
+# Opção automática: ao enviar planilhas novas para a pasta planilhas/,
+# o GitHub processa, grava a medição em dados/ e o site atualiza sozinho.
+name: Atualizar medição de duplicidade
+
+on:
+  push:
+    paths:
+      - "planilhas/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency:
+  group: atualizar-dados
+  cancel-in-progress: false
+
+jobs:
+  processar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Processar planilhas
+        run: node scripts/processar.js planilhas
+
+      - name: Gravar a medição no repositório
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898732+github-actions[bot]@users.noreply.github.com"
+          git add dados
+          if git diff --cached --quiet; then
+            echo "Nenhuma medição nova."
+          else
+            git commit -m "Nova medição de duplicidade"
+            git push
+          fi
+
+      - name: Pedir nova publicação do site
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds" || true
