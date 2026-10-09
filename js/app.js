@@ -137,7 +137,7 @@
     if (isPreview) { ST.preview = obj; } else { ST.saved = obj; }
     ST.cur = obj;
     ST.page = 0; ST.expanded = null;
-    if (!validScope(ST.scope)) ST.scope = "all";
+    if (!validScope(ST.scope)) ST.scope = "e:" + obj.D.empresas[0];
     mountMain();
     renderAll();
   }
@@ -180,12 +180,10 @@
   function debounce(fn, ms) { var t; return function () { clearTimeout(t); t = setTimeout(fn, ms); }; }
 
   // ---------- scope ----------
+  // A visão é sempre por empresa: cada empresa tem o próprio cadastro (SB1).
   function validScope(sc) {
-    if (sc === "all") return true;
-    if (!ST.cur) return false;
-    if (sc.slice(0, 2) === "e:") return ST.cur.D.empresas.indexOf(sc.slice(2)) >= 0;
-    if (sc.slice(0, 2) === "f:") return ST.cur.D.filiais.indexOf(sc.slice(2)) >= 0;
-    return false;
+    if (!ST.cur || !sc) return false;
+    return sc.slice(0, 2) === "e:" && ST.cur.D.empresas.indexOf(sc.slice(2)) >= 0;
   }
   function aggFor(doc, sc) {
     if (!doc) return null;
@@ -211,11 +209,7 @@
       nav.appendChild(h("button", { cls: "seg", type: "button", "aria-pressed": String(ST.scope === sc), onclick: function () { setScope(sc); } },
         [mono ? h("span", { cls: "mono", text: label }) : label]));
     }
-    seg("all", "Todas");
-    ST.cur.D.empresas.forEach(function (e) {
-      seg("e:" + e, "Empresa " + e);
-      ST.cur.D.filiais.forEach(function (f) { if (f.slice(0, 2) === e) seg("f:" + f, f, true); });
-    });
+    ST.cur.D.empresas.forEach(function (e) { seg("e:" + e, "Empresa " + e); });
   }
 
   // ---------- render all ----------
@@ -320,10 +314,10 @@
     legend("filSitLegend", SITS.map(function (x) { return { color: x.color, label: x.label }; }));
     var S = ST.cur.R.summary, D = ST.cur.D;
     function rowsFor(segDefs) {
-      return D.filiais.map(function (f) {
-        var A = S.fil[f];
-        var dim = ST.scope !== "all" && !(ST.scope === "f:" + f || ST.scope === "e:" + f.slice(0, 2));
-        return { key: f, label: f, A: A, dim: dim, total: A.comSim, base: A.prod,
+      return D.empresas.map(function (e) {
+        var A = S.emp[e];
+        var dim = ST.scope !== "e:" + e;
+        return { key: e, label: "Empresa " + e, A: A, dim: dim, total: A.comSim, base: A.prod,
           segs: segDefs.map(function (sd) { return { label: sd.label, color: sd.color, value: A[sd.k] }; }) };
       });
     }
@@ -333,7 +327,7 @@
   }
   function stackedBars(box, rows) {
     box.textContent = "";
-    var W = Math.max(280, box.clientWidth || 600), LW = 64, RW = 112, RH = 36, BT = 18, top = 4;
+    var W = Math.max(280, box.clientWidth || 600), LW = 92, RW = 112, RH = 40, BT = 20, top = 4;
     var H = top + rows.length * RH + 22;
     var ax = niceAxis(Math.max.apply(null, rows.map(function (r) { return r.total; }).concat([1]))), max = ax.max;
     var plotW = W - LW - RW;
@@ -349,7 +343,7 @@
       var y = top + i * RH + (RH - BT) / 2;
       var g = s("g", { style: "cursor:pointer;opacity:" + (r.dim ? 0.35 : 1) });
       g.appendChild(s("rect", { x: 0, y: top + i * RH, width: W, height: RH, fill: "transparent" }));
-      g.appendChild(s("text", { x: 0, y: y + BT / 2 + 4, style: "font-family:var(--font-mono);font-size:12px;fill:var(--ink)" }, r.label));
+      g.appendChild(s("text", { x: 0, y: y + BT / 2 + 4, style: "font-size:12.5px;font-weight:600;fill:var(--ink)" }, r.label));
       var acc = 0, segs = r.segs.filter(function (sg) { return sg.value > 0; });
       segs.forEach(function (sg, j) {
         var x0 = x(acc), x1 = x(acc + sg.value);
@@ -366,12 +360,12 @@
       var tw = n(r.total).length * 7.4 + 14;
       g.appendChild(s("text", { x: x(r.total) + 8 + tw, y: y + BT / 2 + 4, class: "tick" }, pct(r.total, r.base)));
       g.addEventListener("mousemove", function (ev) {
-        showTip("Filial " + r.label + " · " + n(r.base) + " produtos", r.segs.map(function (sg) {
+        showTip(r.label + " · " + n(r.base) + " produtos ativos", r.segs.map(function (sg) {
           return { color: sg.color, label: sg.label, value: n(sg.value) + " · " + pct(sg.value, r.total) };
         }).concat([{ label: "Com similar", value: n(r.total) + " · " + pct(r.total, r.base) }]), ev);
       });
       g.addEventListener("mouseleave", hideTip);
-      g.addEventListener("click", function () { hideTip(); setScope(ST.scope === "f:" + r.key ? "all" : "f:" + r.key); });
+      g.addEventListener("click", function () { hideTip(); setScope("e:" + r.key); });
       svg.appendChild(g);
     });
     box.appendChild(svg);
@@ -563,8 +557,8 @@
     var box = h("div", { cls: "tags" }, tags);
     if (!withFil) return box;
     var st = D.P[i][8].filter(function (x) { return x[1] !== 0 || x[2] > 0; });
-    var fil = st.length ? st.map(function (x) { return D.filiais[x[0]] + ": " + (x[1] ? "saldo " + QF.format(x[1]) : "") + (x[1] && x[2] ? ", " : "") + (x[2] ? "prev. " + QF.format(x[2]) : ""); }).join(" · ")
-      : (D.P[i][7].length ? "Filiais: " + D.P[i][7].map(function (fi) { return D.filiais[fi]; }).join(" · ") : "Sem registro nas filiais");
+    if (!st.length) return box;
+    var fil = st.map(function (x) { return D.filiais[x[0]] + ": " + (x[1] ? "saldo " + QF.format(x[1]) : "") + (x[1] && x[2] ? ", " : "") + (x[2] ? "prev. " + QF.format(x[2]) : ""); }).join(" · ");
     return h("div", null, [box, h("span", { cls: "p-meta", text: fil })]);
   }
   function scorePill(sc) { return h("span", { cls: "pill" }, [sw(BAND[bandOf(sc)].color), sc + "%"]); }
@@ -609,7 +603,8 @@
         if (X.pp[i] > 0) tags.push(h("span", { cls: "tag" }, [sw("var(--cR)"), "Ponto pedido " + QF.format(X.pp[i])]));
         var mov = tags.length > 0;
         if (!mov) tags.push(h("span", { cls: "tag free", text: "Sem saldo, previsão ou PP" }));
-        var fil = (p[7] || []).length ? "Filiais: " + p[7].map(function (fi) { return DD.filiais[fi]; }).join(" · ") : "Sem registro nas filiais";
+        var fil = (p[8] || []).filter(function (x) { return x[1] !== 0 || x[2] > 0; }).map(function (x) {
+          return DD.filiais[x[0]] + ": " + (x[1] ? "saldo " + QF.format(x[1]) : "") + (x[1] && x[2] ? ", " : "") + (x[2] ? "prev. " + QF.format(x[2]) : ""); }).join(" · ");
         var meta = [p[3] ? "Tipo " + p[3] : "", p[5], p[4] ? "Grupo " + p[4] : "", "Emp. " + p[0]].filter(Boolean).join(" · ");
         body.appendChild(h("tr", null, [
           h("td", null, [h("span", { cls: "p-cod", text: p[1] }), h("span", { cls: "p-desc", text: p[2] }), h("span", { cls: "p-meta", text: meta })]),
@@ -671,14 +666,17 @@
   async function salvarArquivo(nome, blob) { Armazem.baixar(nome, blob); }
   function tabelaExportar() {
     var list = currentList(), I = ST.cur.R.info, P = ST.cur.D.P, pr = ST.cur.D.pairs, D = ST.cur.D, rows = [], headers;
-    function filiais(arr) { return (arr || []).map(function (fi) { return D.filiais[fi]; }).join(" "); }
+    function ondeTem(st) {
+      return (st || []).filter(function (x) { return x[1] !== 0 || x[2] > 0; }).map(function (x) {
+        return D.filiais[x[0]] + ": " + (x[1] ? "saldo " + r3(x[1]) : "") + (x[1] && x[2] ? ", " : "") + (x[2] ? "prev. " + r3(x[2]) : ""); }).join(" · ");
+    }
     if (ST.tab === "inat") {
       var X = ST.cur.R.inat;
-      headers = ["Empresa", "Código", "Descrição", "Tipo", "Grupo", "UM", "Motivo", "Saldo", "Previsão de chegada", "Ponto de pedido", "Situação", "Filiais"];
+      headers = ["Empresa", "Código", "Descrição", "Tipo", "Grupo", "UM", "Motivo", "Saldo", "Previsão de chegada", "Ponto de pedido", "Situação", "Onde tem saldo/previsão"];
       list.forEach(function (i) {
         var p = D.I[i], mov = X.saldo[i] !== 0 || X.prev[i] > 0 || X.pp[i] > 0;
         rows.push([p[0], p[1], p[2], p[3], p[4], p[5], p[9] || "Bloqueado", r3(X.saldo[i]), r3(X.prev[i]), r3(X.pp[i]),
-          mov ? "Conferir: inativo com movimento" : "Ok: bloqueado sem movimento", filiais(p[7])]);
+          mov ? "Conferir: inativo com movimento" : "Ok: bloqueado sem movimento", ondeTem(p[8])]);
       });
     } else if (ST.tab === "pares") {
       headers = ["Empresa", "Similaridade %", "Faixa", "Código A", "Descrição A", "Situação A", "Código B", "Descrição B", "Situação B", "Sugestão"];
@@ -688,11 +686,11 @@
       });
     } else {
       headers = ["Empresa", "Código", "Descrição", "Tipo", "Grupo", "UM", "Saldo", "Previsão de chegada", "Ponto de pedido", "Situação",
-        "Maior similaridade %", "Faixa", "Código similar", "Descrição similar", "Situação similar", "Qtd. similares", "Ação sugerida", "Filiais"];
+        "Maior similaridade %", "Faixa", "Código similar", "Descrição similar", "Situação similar", "Qtd. similares", "Ação sugerida", "Onde tem saldo/previsão"];
       list.forEach(function (i) {
         var bp = I.bestP[i], act = productAction(i), acao = Array.prototype.map.call(act.childNodes, function (c) { return c.textContent; }).join(" — ");
         rows.push([P[i][0], P[i][1], P[i][2], P[i][3], P[i][4], P[i][5], r3(I.saldo[i]), r3(I.prev[i]), r3(I.pp[i]), sitText(i), I.best[i], BAND[I.band[i]].label,
-          bp >= 0 ? P[bp][1] : "", bp >= 0 ? P[bp][2] : "", bp >= 0 ? sitText(bp) : "", I.cnt[0][i] + I.cnt[1][i] + I.cnt[2][i], acao, filiais(P[i][7])]);
+          bp >= 0 ? P[bp][1] : "", bp >= 0 ? P[bp][2] : "", bp >= 0 ? sitText(bp) : "", I.cnt[0][i] + I.cnt[1][i] + I.cnt[2][i], acao, ondeTem(P[i][8])]);
       });
     }
     return { headers: headers, rows: rows };
@@ -704,7 +702,7 @@
     try {
       var t = tabelaExportar();
       var nomes = { saldo: ["com_saldo", "Com saldo e similar"], cand: ["candidatos_bloqueio", "Candidatos a bloqueio"], prod: ["produtos", "Produtos com similar"], pares: ["pares", "Pares similares"], inat: ["inativos", "Inativos (bloqueados)"] }[ST.tab];
-      var scopeTag = ST.scope === "all" ? "todas" : ST.scope.replace(":", "_");
+      var scopeTag = "empresa" + ST.scope.slice(2);
       var blob = await XlsxWriter.build({ sheet: nomes[1], headers: t.headers, rows: t.rows });
       await salvarArquivo("duplicidade_" + nomes[0] + "_" + scopeTag + "_" + ST.cur.D.at.slice(0, 10) + ".xlsx", blob);
       btn.textContent = label;

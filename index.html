@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Duplicidade de Cadastro</title>
-<meta name="description" content="Duplicidades de cadastro do Protheus (SB1 × SBZ × SB2): faixas de similaridade, o que não bloquear, status por filial e evolução.">
+<meta name="description" content="Duplicidades de cadastro do Protheus (SB1 × SBZ × SB2): faixas de similaridade, o que não bloquear, status por empresa e evolução.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -67,15 +67,15 @@
   <div class="grid2">
     <section class="panel">
       <div class="panel-h">
-        <h2>Similaridade por filial</h2>
-        <p>Produtos da filial com similar, pela maior similaridade</p>
+        <h2>Similaridade por empresa</h2>
+        <p>Produtos da empresa com similar, pela maior similaridade. Clique para ver a empresa.</p>
       </div>
       <div class="legend" id="filBandLegend"></div>
       <div class="chart" id="filBandChart"></div>
     </section>
     <section class="panel">
       <div class="panel-h">
-        <h2>Situação por filial</h2>
+        <h2>Situação por empresa</h2>
         <p>O que pode ou não ser bloqueado</p>
       </div>
       <div class="legend" id="filSitLegend"></div>
@@ -116,7 +116,7 @@
       <p>Faixas: <strong>95–100%</strong> provável duplicidade · <strong>75–94%</strong> alta semelhança, conferir · <strong>70–74%</strong> semelhança fraca. Abaixo de 70% o par não aparece.</p>
       <p>Situação do produto: <strong>com saldo</strong> (saldo atual diferente de zero no SB2), <strong>previsão de chegada</strong> (Qtd. prevista no SB2 maior que zero), <strong>ponto de pedido</strong> (SBZ maior que zero). Qualquer um deles = não bloquear. Os demais são candidatos: “similar em uso” quando o similar tem saldo, previsão ou ponto de pedido (bloqueie este e mantenha o similar), ou “similar também livre” (escolha qual manter).</p>
       <p>Inativos: produto da SB1 com <strong>Ativo = N</strong> (ou Bloqueado = Sim, quando a coluna vier na exportação) é tratado como bloqueado. Ele sai da comparação e aparece separado na aba “Inativos (bloqueados)”. Se ainda tiver saldo, previsão de chegada ou ponto de pedido, fica marcado para conferir.</p>
-      <p>Filial: o produto conta na filial quando tem registro no Saldo Físico ou na SBZ daquela filial.</p>
+      <p>Empresas: a 02 e a 10 têm cada uma o seu cadastro (SB1). O mesmo código pode ter descrições diferentes em cada empresa, então a comparação, o saldo, a previsão e o ponto de pedido são sempre calculados dentro da mesma empresa.</p>
       <p>Onde ficam os dados: as medições publicadas estão na pasta <code>dados/</code> do repositório. Uma medição salva e ainda não enviada ao GitHub fica só no navegador de quem a gerou.</p>
     </div>
   </details>
