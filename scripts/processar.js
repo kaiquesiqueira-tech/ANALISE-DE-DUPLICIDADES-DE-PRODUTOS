@@ -72,6 +72,6 @@ function listarArquivos(args) {
 
   const g = summary.g;
   console.log(`\nMedição ${id} gravada.`);
-  console.log(`Produtos ativos: ${g.prod} · com similar: ${g.comSim} (95–100%: ${g.b95} · 75–94%: ${g.b75} · 70–74%: ${g.b70})`);
+  console.log(`Produtos ativos: ${g.prod} · com similar: ${g.comSim} (95–100%: ${g.b95} · 80–94%: ${g.b80})`);
   console.log(`Não bloquear: ${g.S + g.P + g.R} · candidatos a bloqueio: ${g.L1 + g.L2}`);
 })().catch((e) => { console.error(e); process.exit(1); });

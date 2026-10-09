@@ -1,12 +1,11 @@
 // ===== Protheus duplicate analysis: table reading, building, summarizing =====
 var DupAnalysis = (function () {
-  var T_MIN = 70;
+  var T_MIN = 80;
   var BANDS = [
     { k: "b95", min: 95, max: 100, label: "95–100%" },
-    { k: "b75", min: 75, max: 94, label: "75–94%" },
-    { k: "b70", min: 70, max: 74, label: "70–74%" }
+    { k: "b80", min: 80, max: 94, label: "80–94%" }
   ];
-  function bandOf(s) { return s >= 95 ? "b95" : s >= 75 ? "b75" : s >= 70 ? "b70" : null; }
+  function bandOf(s) { return s >= 95 ? "b95" : s >= T_MIN ? "b80" : null; }
 
   function normLabel(s) {
     return String(s == null ? "" : s).normalize("NFKD").replace(/[̀-ͯ]/g, "")
@@ -304,7 +303,8 @@ var DupAnalysis = (function () {
   // Derives per-product info + summary from a detail object
   function summarize(D) {
     var n = D.P.length, F = D.filiais.length;
-    var best = new Uint8Array(n), bestP = new Int32Array(n).fill(-1), cnt = [new Int32Array(n), new Int32Array(n), new Int32Array(n)];
+    var best = new Uint8Array(n), bestP = new Int32Array(n).fill(-1), cnt = BANDS.map(function () { return new Int32Array(n); });
+    var bIdx = {}; BANDS.forEach(function (b, x) { bIdx[b.k] = x; });
     var saldo = new Float64Array(n), prev = new Float64Array(n), pp = new Float64Array(n), prot = new Uint8Array(n);
     for (var i = 0; i < n; i++) {
       var st = D.P[i][8];
@@ -314,9 +314,10 @@ var DupAnalysis = (function () {
     var pr = D.pairs, hasProtPartner = new Uint8Array(n);
     for (var k = 0; k < pr.length; k += 3) {
       var a = pr[k], b = pr[k + 1], s = pr[k + 2];
+      if (!bandOf(s)) continue; // abaixo do mínimo (medições antigas)
       if (s > best[a] || (s === best[a] && prot[b] && bestP[a] >= 0 && !prot[bestP[a]])) { best[a] = s; bestP[a] = b; }
       if (s > best[b] || (s === best[b] && prot[a] && bestP[b] >= 0 && !prot[bestP[b]])) { best[b] = s; bestP[b] = a; }
-      var bi = s >= 95 ? 2 : s >= 75 ? 1 : 0;
+      var bi = bIdx[bandOf(s)];
       cnt[bi][a]++; cnt[bi][b]++;
       if (prot[b]) hasProtPartner[a] = 1;
       if (prot[a]) hasProtPartner[b] = 1;
@@ -326,10 +327,9 @@ var DupAnalysis = (function () {
       cat[i] = saldo[i] !== 0 ? "S" : prev[i] > 0 ? "P" : pp[i] > 0 ? "R" : hasProtPartner[i] ? "L1" : "L2";
     }
     function agg(prod) {
-      return { prod: prod || 0, comSim: 0, b95: 0, b75: 0, b70: 0, S: 0, P: 0, R: 0, L1: 0, L2: 0,
-        fS: 0, fP: 0, fR: 0, inat: 0, inatMov: 0,
-        m: { b95: { S: 0, P: 0, R: 0, L1: 0, L2: 0 }, b75: { S: 0, P: 0, R: 0, L1: 0, L2: 0 }, b70: { S: 0, P: 0, R: 0, L1: 0, L2: 0 } },
-        pairs: { b95: 0, b75: 0, b70: 0 } };
+      var o = { prod: prod || 0, comSim: 0, S: 0, P: 0, R: 0, L1: 0, L2: 0, fS: 0, fP: 0, fR: 0, inat: 0, inatMov: 0, m: {}, pairs: {} };
+      BANDS.forEach(function (bd) { o[bd.k] = 0; o.pairs[bd.k] = 0; o.m[bd.k] = { S: 0, P: 0, R: 0, L1: 0, L2: 0 }; });
+      return o;
     }
     var totProd = 0;
     Object.keys(D.totals.prodPorEmp).forEach(function (e) { totProd += D.totals.prodPorEmp[e]; });
@@ -344,8 +344,9 @@ var DupAnalysis = (function () {
     }
     var band = new Array(n);
     for (i = 0; i < n; i++) {
-      var b = best[i] >= 95 ? "b95" : best[i] >= 75 ? "b75" : "b70";
+      var b = bandOf(best[i]);
       band[i] = b;
+      if (!b) continue; // sem similar acima do mínimo
       var c = cat[i], e = D.P[i][0];
       add(S.g, b, c, i);
       if (S.emp[e]) add(S.emp[e], b, c, i);
@@ -364,6 +365,7 @@ var DupAnalysis = (function () {
     }
     for (k = 0; k < pr.length; k += 3) {
       var pb = bandOf(pr[k + 2]), ea = D.P[pr[k]][0];
+      if (!pb) continue;
       S.g.pairs[pb]++;
       if (S.emp[ea]) S.emp[ea].pairs[pb]++;
       var seenF = {};

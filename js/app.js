@@ -37,8 +37,7 @@
 
   var BANDS = [
     { k: "b95", label: "95–100%", name: "provável duplicidade", color: "var(--b95)" },
-    { k: "b75", label: "75–94%", name: "alta semelhança", color: "var(--b75)" },
-    { k: "b70", label: "70–74%", name: "semelhança fraca", color: "var(--b70)" }
+    { k: "b80", label: "80–94%", name: "alta semelhança", color: "var(--b80)" }
   ];
   var BAND = {}; BANDS.forEach(function (b) { BAND[b.k] = b; });
   var SITS = [
@@ -49,12 +48,14 @@
     { k: "L2", label: "Livre · similar também livre", color: "var(--cL2)" }
   ];
   var SIT = {}; SITS.forEach(function (x) { SIT[x.k] = x; });
-  function bandOf(sc) { return sc >= 95 ? "b95" : sc >= 75 ? "b75" : "b70"; }
+  function bandOf(sc) { return sc >= 95 ? "b95" : sc >= 80 ? "b80" : null; }
+  function allBands() { var o = {}; BANDS.forEach(function (b) { o[b.k] = true; }); return o; }
+  function onlyOf(k) { var o = {}; BANDS.forEach(function (b) { o[b.k] = b.k === k; }); return o; }
 
   var ST = {
     snaps: [], viewId: null, cur: null, saved: null, preview: null, loadingId: null,
     scope: store("scope") || "all", tab: store("tab") || "saldo",
-    bands: { b95: true, b75: true, b70: true }, q: "", sit: "", tipo: "", page: 0, expanded: null
+    bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null
   };
   var PAGE = 50;
 
@@ -153,9 +154,10 @@
     }
     obj.adj = { off: off, nb: nb, sc: sc };
   }
+  function nSim(i) { var c = ST.cur.R.info.cnt, t = 0; for (var x = 0; x < c.length; x++) t += c[x][i]; return t; }
   function neighbors(i) {
     var A = ST.cur.adj, out = [];
-    for (var k = A.off[i]; k < A.off[i + 1]; k++) out.push([A.nb[k], A.sc[k]]);
+    for (var k = A.off[i]; k < A.off[i + 1]; k++) if (bandOf(A.sc[k])) out.push([A.nb[k], A.sc[k]]);
     out.sort(function (x, y) { return y[1] - x[1] || (ST.cur.R.info.prot[y[0]] - ST.cur.R.info.prot[x[0]]); });
     return out;
   }
@@ -235,10 +237,12 @@
     $("previewBanner").hidden = !ST.preview;
   }
   function prevDocFor() {
-    if (ST.preview) return ST.snaps.length ? ST.snaps[ST.snaps.length - 1] : null;
+    var T = ST.cur.D.T || 80;
+    var same = ST.snaps.filter(function (d) { return (d.T || 70) === T; });
+    if (ST.preview) return same.length ? same[same.length - 1] : null;
     var idx = -1;
-    for (var i = 0; i < ST.snaps.length; i++) if (ST.snaps[i].id === ST.cur.id) idx = i;
-    return idx > 0 ? ST.snaps[idx - 1] : null;
+    for (var i = 0; i < same.length; i++) if (same[i].id === ST.cur.id) idx = i;
+    return idx > 0 ? same[idx - 1] : null;
   }
 
   // ---------- KPIs ----------
@@ -263,7 +267,7 @@
       box.appendChild(el);
     }
     act = { fn: function () { goTab("prod", ""); }, pressed: ST.tab === "prod" && !only && !ST.sit, title: "Listar todos os produtos com similar" };
-    tile("hero", ["Produtos com similar ≥ 70%"], n(A.comSim), "de " + n(A.prod) + " produtos ativos · " + pct(A.comSim, A.prod), delta(A.comSim, PA && PA.comSim, pd, true));
+    tile("hero", ["Produtos com similar ≥ " + (ST.cur.D.T || 80) + "%"], n(A.comSim), "de " + n(A.prod) + " produtos ativos · " + pct(A.comSim, A.prod), delta(A.comSim, PA && PA.comSim, pd, true));
     BANDS.forEach(function (b) {
       act = { fn: function () { goBand(b.k); }, pressed: only === b.k, title: only === b.k ? "Mostrar todas as faixas" : "Listar só " + b.label };
       tile("", [sw(b.color), b.label + " · " + b.name], n(A[b.k]), n(A.pairs[b.k]) + " pares de produtos", delta(A[b.k], PA && PA[b.k], pd, true));
@@ -300,7 +304,7 @@
   }
   function goList(bk, sk) {
     ST.tab = "prod"; store("tab", "prod");
-    ST.bands = { b95: bk === "b95", b75: bk === "b75", b70: bk === "b70" };
+    ST.bands = onlyOf(bk);
     ST.sit = sk; ST.page = 0; ST.expanded = null;
     refreshFilters(true);
   }
@@ -310,8 +314,8 @@
   }
   // Clique num indicador de faixa: lista só aquela faixa (clicar de novo volta para todas)
   function goBand(bk) {
-    if (onlyBand() === bk) ST.bands = { b95: true, b75: true, b70: true };
-    else ST.bands = { b95: bk === "b95", b75: bk === "b75", b70: bk === "b70" };
+    if (onlyBand() === bk) ST.bands = allBands();
+    else ST.bands = onlyOf(bk);
     // a lista mostra o mesmo total do indicador: todos os produtos daquela faixa
     if (ST.tab === "inat" || ST.tab === "saldo") { ST.tab = "prod"; ST.sit = ""; store("tab", "prod"); }
     ST.page = 0; ST.expanded = null;
@@ -319,7 +323,7 @@
   }
   function goTab(tab, sit) {
     ST.tab = tab; store("tab", tab); ST.sit = sit || "";
-    ST.bands = { b95: true, b75: true, b70: true };
+    ST.bands = allBands();
     ST.page = 0; ST.expanded = null;
     refreshFilters(true);
   }
@@ -406,7 +410,8 @@
   }
 
   function evoSeries() {
-    var pts = ST.snaps.map(function (d) { return { at: d.at, A: aggFor(d, ST.scope), id: d.id, preview: false }; });
+    var T = ST.cur.D.T || 80;
+    var pts = ST.snaps.filter(function (d) { return (d.T || 70) === T; }).map(function (d) { return { at: d.at, A: aggFor(d, ST.scope), id: d.id, preview: false }; });
     if (ST.preview) pts.push({ at: ST.preview.D.at, A: aggFor(ST.preview.R.summary, ST.scope), id: null, preview: true });
     return pts;
   }
@@ -670,7 +675,7 @@
           h("td", null, [prodCell(i)]),
           h("td", null, [statusTags(i, true)]),
           h("td", null, bp >= 0 ? [h("div", { style: "display:flex;gap:8px;align-items:flex-start" }, [scorePill(I.best[i]), h("div", { style: "min-width:0" }, [prodCell(bp, true), statusTags(bp)])])] : []),
-          h("td", { cls: "r num", text: n(I.cnt[0][i] + I.cnt[1][i] + I.cnt[2][i]) }),
+          h("td", { cls: "r num", text: n(nSim(i)) }),
           h("td", null, [productAction(i)])
         ]);
         body.appendChild(tr);
@@ -725,7 +730,7 @@
       list.forEach(function (i) {
         var bp = I.bestP[i], act = productAction(i), acao = Array.prototype.map.call(act.childNodes, function (c) { return c.textContent; }).join(" — ");
         rows.push([P[i][0], P[i][1], P[i][2], P[i][3], P[i][4], P[i][5], r3(I.saldo[i]), r3(I.prev[i]), r3(I.pp[i]), sitText(i), I.best[i], BAND[I.band[i]].label,
-          bp >= 0 ? P[bp][1] : "", bp >= 0 ? P[bp][2] : "", bp >= 0 ? sitText(bp) : "", I.cnt[0][i] + I.cnt[1][i] + I.cnt[2][i], acao, ondeTem(P[i][8])]);
+          bp >= 0 ? P[bp][1] : "", bp >= 0 ? P[bp][2] : "", bp >= 0 ? sitText(bp) : "", nSim(i), acao, ondeTem(P[i][8])]);
       });
     }
     return { headers: headers, rows: rows };
