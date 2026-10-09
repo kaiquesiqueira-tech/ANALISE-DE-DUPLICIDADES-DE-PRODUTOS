@@ -577,7 +577,7 @@
     if (ST.cur.tipos.indexOf(ST.tipo) < 0) ST.tipo = "";
     ft.value = ST.tipo;
     var fx = BANDS.filter(function (b) { return ST.bands[b.k]; }).map(function (b) { return b.label; });
-    $("tblSub").textContent = "Escopo: " + scopeName(ST.scope) + (ST.tab !== "inat" && fx.length < 3 ? " · Faixa: " + (fx.length ? fx.join(", ") : "nenhuma") : "") + ". Clique num produto para ver todos os similares.";
+    $("tblSub").textContent = "Escopo: " + scopeName(ST.scope) + (ST.tab !== "inat" && fx.length < BANDS.length ? " · Faixa: " + (fx.length ? fx.join(", ") : "nenhuma") : "") + ". Clique num produto para ver todos os similares.";
   }
   function prodCell(i, compact) {
     var cur = ST.cur, p = cur.D.P[i];
