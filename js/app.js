@@ -170,7 +170,7 @@
     $("q").addEventListener("input", debounce(function () { ST.q = $("q").value.trim().toUpperCase(); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); }, 200));
     $("fSit").addEventListener("change", function () { ST.sit = $("fSit").value; ST.page = 0; renderTabs(); renderTable(); });
     $("fTipo").addEventListener("change", function () { ST.tipo = $("fTipo").value; ST.page = 0; renderTabs(); renderTable(); });
-    $("btnCsv").addEventListener("click", exportCsv);
+    $("btnCsv").addEventListener("click", exportXlsx);
     $("btnCsv").hidden = false;
     if (window.ResizeObserver) {
       var ro = new ResizeObserver(debounce(function () { renderCharts(); }, 120));
@@ -665,39 +665,53 @@
     ]));
   }
 
-  // ---------- CSV ----------
-  function csvCell(v) { v = v == null ? "" : String(v); return /[";\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  // ---------- exportar Excel ----------
   function sitText(i) { var I = ST.cur.R.info; return SIT[I.cat[i]].label; }
-  function numBR(x) { return String(Math.round(x * 1000) / 1000).replace(".", ","); }
-  async function exportCsv() {
-    if (!ST.cur) return;
-    var list = currentList(), I = ST.cur.R.info, P = ST.cur.D.P, pr = ST.cur.D.pairs, D = ST.cur.D, lines = [];
+  function r3(x) { return Math.round(x * 1000) / 1000; }
+  async function salvarArquivo(nome, blob) { Armazem.baixar(nome, blob); }
+  function tabelaExportar() {
+    var list = currentList(), I = ST.cur.R.info, P = ST.cur.D.P, pr = ST.cur.D.pairs, D = ST.cur.D, rows = [], headers;
+    function filiais(arr) { return (arr || []).map(function (fi) { return D.filiais[fi]; }).join(" "); }
     if (ST.tab === "inat") {
       var X = ST.cur.R.inat;
-      lines.push(["Empresa", "Código", "Descrição", "Tipo", "Grupo", "UM", "Motivo", "Saldo", "Previsão de chegada", "Ponto de pedido", "Filiais"].join(";"));
+      headers = ["Empresa", "Código", "Descrição", "Tipo", "Grupo", "UM", "Motivo", "Saldo", "Previsão de chegada", "Ponto de pedido", "Situação", "Filiais"];
       list.forEach(function (i) {
-        var p = D.I[i];
-        lines.push([p[0], p[1], p[2], p[3], p[4], p[5], p[9] || "Bloqueado", numBR(X.saldo[i]), numBR(X.prev[i]), numBR(X.pp[i]),
-          (p[7] || []).map(function (fi) { return D.filiais[fi]; }).join(" ")].map(csvCell).join(";"));
+        var p = D.I[i], mov = X.saldo[i] !== 0 || X.prev[i] > 0 || X.pp[i] > 0;
+        rows.push([p[0], p[1], p[2], p[3], p[4], p[5], p[9] || "Bloqueado", r3(X.saldo[i]), r3(X.prev[i]), r3(X.pp[i]),
+          mov ? "Conferir: inativo com movimento" : "Ok: bloqueado sem movimento", filiais(p[7])]);
       });
     } else if (ST.tab === "pares") {
-      lines.push(["Empresa", "Similaridade %", "Faixa", "Código A", "Descrição A", "Situação A", "Código B", "Descrição B", "Situação B", "Sugestão"].join(";"));
+      headers = ["Empresa", "Similaridade %", "Faixa", "Código A", "Descrição A", "Situação A", "Código B", "Descrição B", "Situação B", "Sugestão"];
       list.forEach(function (k) {
         var a = pr[k], b = pr[k + 1], sg = pairSuggestion(a, b);
-        lines.push([P[a][0], pr[k + 2], BAND[bandOf(pr[k + 2])].label, P[a][1], P[a][2], sitText(a), P[b][1], P[b][2], sitText(b), sg.main + " — " + sg.sub].map(csvCell).join(";"));
+        rows.push([P[a][0], pr[k + 2], BAND[bandOf(pr[k + 2])].label, P[a][1], P[a][2], sitText(a), P[b][1], P[b][2], sitText(b), sg.main + " — " + sg.sub]);
       });
     } else {
-      lines.push(["Empresa", "Código", "Descrição", "Tipo", "Grupo", "UM", "Saldo", "Previsão de chegada", "Ponto de pedido", "Situação", "Maior similaridade %", "Faixa", "Código similar", "Descrição similar", "Situação similar", "Qtd. similares", "Filiais"].join(";"));
+      headers = ["Empresa", "Código", "Descrição", "Tipo", "Grupo", "UM", "Saldo", "Previsão de chegada", "Ponto de pedido", "Situação",
+        "Maior similaridade %", "Faixa", "Código similar", "Descrição similar", "Situação similar", "Qtd. similares", "Ação sugerida", "Filiais"];
       list.forEach(function (i) {
-        var bp = I.bestP[i];
-        lines.push([P[i][0], P[i][1], P[i][2], P[i][3], P[i][4], P[i][5], numBR(I.saldo[i]), numBR(I.prev[i]), numBR(I.pp[i]), sitText(i), I.best[i], BAND[I.band[i]].label,
-          bp >= 0 ? P[bp][1] : "", bp >= 0 ? P[bp][2] : "", bp >= 0 ? sitText(bp) : "", I.cnt[0][i] + I.cnt[1][i] + I.cnt[2][i],
-          P[i][7].map(function (fi) { return D.filiais[fi]; }).join(" ")].map(csvCell).join(";"));
+        var bp = I.bestP[i], act = productAction(i), acao = Array.prototype.map.call(act.childNodes, function (c) { return c.textContent; }).join(" — ");
+        rows.push([P[i][0], P[i][1], P[i][2], P[i][3], P[i][4], P[i][5], r3(I.saldo[i]), r3(I.prev[i]), r3(I.pp[i]), sitText(i), I.best[i], BAND[I.band[i]].label,
+          bp >= 0 ? P[bp][1] : "", bp >= 0 ? P[bp][2] : "", bp >= 0 ? sitText(bp) : "", I.cnt[0][i] + I.cnt[1][i] + I.cnt[2][i], acao, filiais(P[i][7])]);
       });
     }
-    var tabName = { saldo: "com_saldo", cand: "candidatos_bloqueio", prod: "produtos", pares: "pares", inat: "inativos" }[ST.tab];
-    var scopeTag = ST.scope === "all" ? "todas" : ST.scope.replace(":", "_");
-    Armazem.baixar("duplicidade_" + tabName + "_" + scopeTag + "_" + D.at.slice(0, 10) + ".csv", "\uFEFF" + lines.join("\r\n"), "text/csv;charset=utf-8");
+    return { headers: headers, rows: rows };
+  }
+  async function exportXlsx() {
+    if (!ST.cur) return;
+    var btn = $("btnCsv"), label = "Exportar Excel";
+    btn.disabled = true; btn.textContent = "Gerando…";
+    try {
+      var t = tabelaExportar();
+      var nomes = { saldo: ["com_saldo", "Com saldo e similar"], cand: ["candidatos_bloqueio", "Candidatos a bloqueio"], prod: ["produtos", "Produtos com similar"], pares: ["pares", "Pares similares"], inat: ["inativos", "Inativos (bloqueados)"] }[ST.tab];
+      var scopeTag = ST.scope === "all" ? "todas" : ST.scope.replace(":", "_");
+      var blob = await XlsxWriter.build({ sheet: nomes[1], headers: t.headers, rows: t.rows });
+      await salvarArquivo("duplicidade_" + nomes[0] + "_" + scopeTag + "_" + ST.cur.D.at.slice(0, 10) + ".xlsx", blob);
+      btn.textContent = label;
+    } catch (e) {
+      btn.textContent = e && e.code === "declined" ? label : "Não consegui exportar";
+      if (btn.textContent !== label) setTimeout(function () { btn.textContent = label; }, 3000);
+    } finally { btn.disabled = false; }
   }
 
   // ---------- history ----------
