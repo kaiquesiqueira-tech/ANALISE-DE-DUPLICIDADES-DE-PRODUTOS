@@ -55,7 +55,7 @@
   var ST = {
     snaps: [], viewId: null, cur: null, saved: null, preview: null, loadingId: null,
     scope: store("scope") || "all", tab: store("tab") || "saldo",
-    bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null
+    bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null, mk: store("mk") || ""
   };
   var PAGE = 50;
 
@@ -87,6 +87,7 @@
   function temDetalhe(m) { return m && (m.origem === "local" || !!m.arquivo); }
   async function boot() {
     $("btnUpload").hidden = false;
+    MarkStore.start();
     await recarregar();
   }
   async function recarregar() {
@@ -135,6 +136,8 @@
     obj.inSearch = obj.D.I.map(function (p) { return (p[1] + " " + p[2]).toUpperCase(); });
     obj.search = obj.D.P.map(function (p) { return (p[1] + " " + p[2]).toUpperCase(); });
     obj.filIndex = {}; obj.D.filiais.forEach(function (f, i) { obj.filIndex[f] = i; });
+    obj.keyIdx = {}; obj.D.P.forEach(function (p, i) { obj.keyIdx[p[0] + "|" + p[1]] = i; });
+    obj.inKey = {}; obj.D.I.forEach(function (p, i) { obj.inKey[p[0] + "|" + p[1]] = i; });
     if (isPreview) { ST.preview = obj; } else { ST.saved = obj; }
     ST.cur = obj;
     ST.page = 0; ST.expanded = null;
@@ -173,6 +176,7 @@
     $("q").addEventListener("input", debounce(function () { ST.q = $("q").value.trim().toUpperCase(); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); }, 200));
     $("fSit").addEventListener("change", function () { ST.sit = $("fSit").value; ST.page = 0; refreshFilters(false); });
     $("fTipo").addEventListener("change", function () { ST.tipo = $("fTipo").value; ST.page = 0; renderTabs(); renderTable(); });
+    $("fMk").addEventListener("change", function () { setMk($("fMk").value); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); });
     $("btnCsv").addEventListener("click", exportXlsx);
     $("btnCsv").hidden = false;
     if (window.ResizeObserver) {
@@ -221,11 +225,13 @@
     renderMeta();
     renderScope();
     renderKpis();
+    renderProg();
     renderMatrix();
     renderCharts();
     renderTabs();
     renderTable();
     renderHist();
+    renderSaveState();
   }
   function renderMeta() {
     var D = ST.cur.D, txt = (ST.preview ? "Prévia de " : "Medição de ") + dt(D.at, true);
@@ -286,7 +292,8 @@
     tile({ label: [h("span", { cls: "sw", style: "background:var(--ok);border-radius:50%" }), "Podem ser bloqueados"], val: n(A.L1 + A.L2), sub: "Sem saldo, previsão ou ponto de pedido",
       extra: h("div", { cls: "flags" }, [
         h("span", null, [sw("var(--cL1)"), n(A.L1) + " com similar em uso (mais seguros)"]),
-        h("span", null, [sw("var(--cL2)"), n(A.L2) + " com similar também livre"])]),
+        h("span", null, [sw("var(--cL2)"), n(A.L2) + " com similar também livre"]),
+        MK.on ? h("span", { cls: "mk-flag" }, [h("span", { cls: "sw", style: "background:var(--ok);border-radius:50%" }), n(progFor(ST.scope.slice(2)).livre) + " já marcados como bloqueados"]) : null]),
       delta: delta(A.L1 + A.L2, PA && (PA.L1 + PA.L2), pd, true), fn: function () { goTab("prod", "livre"); },
       pressed: ST.tab === "prod" && ST.sit === "livre", go: "Ver lista", title: "Listar os produtos que podem ser bloqueados" });
     var note = $("inatNote"), inat = A.inat || 0;
@@ -315,7 +322,7 @@
   function goList(bk, sk) {
     ST.tab = "prod"; store("tab", "prod");
     ST.bands = onlyOf(bk);
-    ST.sit = sk; ST.page = 0; ST.expanded = null;
+    ST.sit = sk; setMk(""); ST.page = 0; ST.expanded = null;
     refreshFilters(true);
   }
   function onlyBand() {
@@ -326,13 +333,14 @@
   function goBand(bk) {
     if (onlyBand() === bk) ST.bands = allBands();
     else ST.bands = onlyOf(bk);
+    setMk("");
     // a lista mostra o mesmo total do indicador: todos os produtos daquela faixa
     if (ST.tab === "saldo") { ST.tab = "prod"; ST.sit = ""; store("tab", "prod"); }
     ST.page = 0; ST.expanded = null;
     refreshFilters(true);
   }
   function goTab(tab, sit) {
-    ST.tab = tab; store("tab", tab); ST.sit = sit || "";
+    ST.tab = tab; store("tab", tab); ST.sit = sit || ""; setMk("");
     ST.bands = allBands();
     ST.page = 0; ST.expanded = null;
     refreshFilters(true);
@@ -372,6 +380,7 @@
     stackedBars($("filBandChart"), rowsFor(BANDS.map(function (b) { return { k: b.k, label: b.label, color: b.color }; })));
     stackedBars($("filSitChart"), rowsFor(SITS));
     renderEvo();
+    drawProgChart();
   }
   function stackedBars(box, rows) {
     box.textContent = "";
@@ -486,6 +495,253 @@
     box.appendChild(svg);
   }
 
+  // ---------- marcações de bloqueio ----------
+  // Cada produto marcado fica guardado por empresa + código: { on, d: quando marcou, t: última alteração }.
+  // As marcações não dependem da medição: valem para qualquer base carregada depois.
+  var MK = { on: false, server: {}, local: {}, readonly: false, saving: 0, savedAt: null, failed: false, refocus: null };
+  function mkKey(emp, cod) { return emp + "|" + cod; }
+  function mkEntry(emp, cod) {
+    var k = mkKey(emp, cod), e = Object.prototype.hasOwnProperty.call(MK.local, k) ? MK.local[k] : MK.server[k];
+    return e && e.on ? e : null;
+  }
+  function mkOf(i) { var p = ST.cur.D.P[i]; return mkEntry(p[0], p[1]); }
+  function mkWhen(e) { return e.d || e.t; }
+  // marcado antes desta medição e ainda ativo na SB1 = conferir no Protheus
+  function mkConf(i) { var e = mkOf(i); return !!e && mkWhen(e) < ST.cur.D.at; }
+  function onMarks(map) {
+    MK.server = map || {};
+    MK.on = true;
+    scheduleMarkRender();
+  }
+  var mkTimer = 0;
+  function scheduleMarkRender() {
+    if (mkTimer) return;
+    mkTimer = setTimeout(function () {
+      mkTimer = 0;
+      if (!ST.cur || !mounted) return;
+      renderKpis(); renderProg(); renderTabs(); renderTable(); renderSaveState();
+    }, 16);
+  }
+  function setMk(v) { ST.mk = v || ""; store("mk", ST.mk); }
+
+  function setMarks(idxs, on) {
+    if (!MK.on || MK.readonly || !idxs.length) return;
+    var P = ST.cur.D.P, now = new Date().toISOString(), items = [], undo = [];
+    idxs.forEach(function (i) {
+      var p = P[i], cur = mkEntry(p[0], p[1]);
+      if (!!cur === !!on) return;
+      undo.push({ emp: p[0], cod: p[1], prev: cur });
+      items.push({ emp: p[0], cod: p[1], e: on ? { on: true, d: now, t: now } : { on: false, d: mkWhen(cur), t: now } });
+    });
+    if (!items.length) return;
+    applyMarks(items);
+    var msg = items.length === 1 ? items[0].cod + (on ? " marcado como bloqueado." : " desmarcado.")
+      : n(items.length) + (on ? " produtos marcados como bloqueados." : " produtos desmarcados.");
+    toast(msg, function () {
+      var t2 = new Date().toISOString();
+      applyMarks(undo.map(function (u) {
+        return { emp: u.emp, cod: u.cod, e: u.prev ? { on: true, d: mkWhen(u.prev), t: t2 } : { on: false, d: null, t: t2 } };
+      }));
+    });
+  }
+  function applyMarks(items) {
+    items.forEach(function (it) { MK.local[mkKey(it.emp, it.cod)] = it.e; });
+    MK.saving++; renderSaveState(); scheduleMarkRender();
+    Promise.resolve().then(function () { return MarkStore.save(items); }).then(function () {
+      MK.savedAt = new Date(); MK.failed = false;
+      items.forEach(function (it) { var k = mkKey(it.emp, it.cod); if (MK.local[k] === it.e) MK.server[k] = it.e; });
+    }, function (e) {
+      MK.failed = true;
+      var code = e && e.code;
+      if (code === "invalid_argument" || code === "not_granted" || code === "revoked") {
+        MK.readonly = true;
+        toast("Você pode ver as marcações, mas não tem permissão para alterar. Peça acesso de edição a quem compartilhou o painel.");
+      } else if (code === "quota_exceeded") toast("O espaço do painel está cheio. A marcação não foi salva.");
+      else toast("Não consegui salvar a marcação" + (MarkStore.why ? MarkStore.why(e) : "") + ". Tente de novo.");
+    }).then(function () {
+      items.forEach(function (it) { var k = mkKey(it.emp, it.cod); if (MK.local[k] === it.e) delete MK.local[k]; });
+      MK.saving--; renderSaveState(); scheduleMarkRender();
+    });
+  }
+
+  var toastT = 0;
+  function toast(msg, undoFn) {
+    var el = $("toast"); if (!el) return;
+    el.textContent = "";
+    el.appendChild(h("span", { text: msg }));
+    if (undoFn) el.appendChild(h("button", { cls: "btn small", type: "button", text: "Desfazer", onclick: function () { el.hidden = true; undoFn(); } }));
+    el.hidden = false;
+    clearTimeout(toastT);
+    toastT = setTimeout(function () { el.hidden = true; }, undoFn ? 6500 : 8000);
+  }
+  function renderSaveState() {
+    var el = $("saveState"); if (!el) return;
+    el.hidden = !MK.on;
+    if (!MK.on) return;
+    var st = MK.readonly ? "ro" : MK.saving ? "busy" : MK.failed ? "err" : MK.savedAt ? "ok" : "";
+    el.className = "savestate " + st;
+    el.textContent = MK.readonly ? "Só leitura: sem permissão para marcar"
+      : MK.saving ? "Salvando…"
+      : MK.failed ? "A última marcação não foi salva"
+      : MK.savedAt ? MarkStore.savedText + " às " + MK.savedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+      : MarkStore.hint();
+  }
+
+  // Andamento por empresa
+  function progFor(emp) {
+    var cur = ST.cur, D = cur.D, I = cur.R.info, R = { total: 0, livre: 0, prot: 0, conf: 0, confirmados: 0, semSim: 0, hoje: 0, semana: 0, times: [] };
+    var all = {}, k;
+    for (k in MK.server) all[k] = MK.server[k];
+    for (k in MK.local) all[k] = MK.local[k];
+    var d0 = new Date(); d0.setHours(0, 0, 0, 0);
+    var t0 = d0.getTime(), t7 = t0 - 6 * 864e5;
+    for (k in all) {
+      var e = all[k];
+      if (!e || !e.on || k.slice(0, k.indexOf("|")) !== emp) continue;
+      R.total++;
+      var tm = new Date(mkWhen(e)).getTime();
+      R.times.push(tm);
+      if (tm >= t0) R.hoje++;
+      if (tm >= t7) R.semana++;
+      var i = cur.keyIdx[k];
+      if (i != null) {
+        if (I.prot[i]) R.prot++; else R.livre++;
+        if (mkWhen(e) < D.at) R.conf++;
+      } else if (cur.inKey[k] != null) R.confirmados++;
+      else R.semSim++;
+    }
+    return R;
+  }
+  function goMk(mk, sit) {
+    ST.tab = "prod"; store("tab", "prod");
+    ST.sit = sit || ""; setMk(mk);
+    ST.bands = allBands(); ST.page = 0; ST.expanded = null;
+    refreshFilters(true);
+  }
+  function renderProg() {
+    var box = $("pProg"); if (!box) return;
+    box.hidden = !MK.on;
+    if (!MK.on || !ST.cur) return;
+    var emp = ST.scope.slice(2), A = aggFor(ST.cur.R.summary, ST.scope) || {}, R = progFor(emp), livres = (A.L1 || 0) + (A.L2 || 0);
+    $("progSub").textContent = "Empresa " + emp + " · " + MarkStore.note;
+    var acts = $("progActions"); acts.textContent = "";
+    MarkStore.extra(R).forEach(function (b) { acts.appendChild(b); });
+    if (R.total) acts.appendChild(h("button", { cls: "btn small", type: "button", text: "Ver marcados", onclick: function () { goMk("sim", ""); } }));
+    acts.appendChild(h("button", { cls: "btn small primary", type: "button", text: "Continuar bloqueando →", title: "Lista dos que podem ser bloqueados e ainda não foram marcados",
+      onclick: function () { goMk("nao", "livre"); } }));
+
+    var main = $("progMain"); main.textContent = "";
+    var pc = livres ? Math.min(100, 100 * R.livre / livres) : 0;
+    main.appendChild(h("div", { cls: "pg-big" }, [h("span", { cls: "pg-val num", text: n(R.total) }),
+      h("span", { cls: "pg-unit", text: R.total === 1 ? "produto marcado como bloqueado" : "produtos marcados como bloqueados" })]));
+    main.appendChild(h("div", { cls: "pbar", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(pc)),
+      "aria-label": "Marcados entre os que podem ser bloqueados" }, [h("i", { style: "width:" + (R.livre ? "max(4px, " + pc + "%)" : "0") })]));
+    main.appendChild(h("div", { cls: "pg-cap" }, [h("strong", { cls: "num", text: n(R.livre) }), " dos " + n(livres) + " que podem ser bloqueados nesta medição (" + (R.livre && 1000 * R.livre < livres ? "menos de 0,1%" : pct(R.livre, livres)) + ")"]));
+
+    var st = $("progStats"); st.textContent = "";
+    function stat(o) {
+      var kids = [h("b", { cls: "num", text: n(o.v) }), h("span", { text: o.label }), o.sub ? h("small", { text: o.sub }) : null];
+      st.appendChild(o.fn ? h("button", { cls: "pg-stat " + (o.cls || ""), type: "button", title: o.title || "", onclick: o.fn }, kids) : h("div", { cls: "pg-stat " + (o.cls || "") }, kids));
+    }
+    stat({ v: R.hoje, label: "Hoje", cls: R.hoje ? "good" : "" });
+    stat({ v: R.semana, label: "Últimos 7 dias" });
+    stat({ v: R.confirmados, label: "Confirmados na base", cls: R.confirmados ? "good" : "", sub: "já aparecem inativos na medição de " + dt(ST.cur.D.at) });
+    stat({ v: R.conf, label: "A conferir", cls: R.conf ? "warn" : "", sub: "marcados antes desta medição e ainda ativos na SB1",
+      fn: R.conf ? function () { goMk("conf", ""); } : null, title: "Ver os marcados que ainda estão ativos" });
+    if (R.prot) stat({ v: R.prot, label: "Marcados em “Não bloquear”", cls: "warn", sub: "têm saldo, previsão ou ponto de pedido",
+      fn: function () { goMk("sim", "prot"); }, title: "Ver os marcados que têm saldo, previsão ou ponto de pedido" });
+    drawProgChart(R.times);
+  }
+  var progTimes = [];
+  function drawProgChart(times) {
+    if (times) progTimes = times;
+    var box = $("progChart"); if (!box) return;
+    box.textContent = "";
+    if (!progTimes.length) {
+      box.appendChild(h("p", { cls: "note", text: "Ainda não há marcações nesta empresa. Na lista de produtos, marque a caixa “Bloqueei” de cada produto que você bloquear no Protheus." }));
+      return;
+    }
+    var DAY = 864e5, sod = function (t) { var d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+    var ts = progTimes.slice().sort(function (a, b) { return a - b; });
+    var today = sod(Date.now()), start = Math.max(sod(ts[0]), today - 59 * DAY);
+    if (today - start < 6 * DAY) start = today - 6 * DAY;
+    var nd = Math.round((today - start) / DAY) + 1, daily = [], base = 0, i;
+    for (i = 0; i < nd; i++) daily.push(0);
+    ts.forEach(function (t) { var d = sod(t); if (d < start) base++; else daily[Math.min(nd - 1, Math.round((d - start) / DAY))]++; });
+    var cum = [], acc = base;
+    daily.forEach(function (v) { acc += v; cum.push(acc); });
+    var W = Math.max(240, box.clientWidth || 320), H = 138, L = 40, R = 10, T = 8, B = 22;
+    var ax = niceAxis(Math.max(1, cum[cum.length - 1])), max = ax.max;
+    var px = function (k) { return L + (W - L - R) * (nd === 1 ? 0.5 : k / (nd - 1)); };
+    var py = function (v) { return T + (H - T - B) * (1 - v / max); };
+    var svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img", "aria-label": "Total de marcados por dia" });
+    var stepT = ax.n > 4 ? 2 : 1;
+    for (var t = 0; t <= ax.n; t += stepT) {
+      var tv = ax.step * t;
+      svg.appendChild(s("line", { x1: L, x2: W - R, y1: py(tv), y2: py(tv), class: t ? "grid" : "base" }));
+      svg.appendChild(s("text", { x: L - 6, y: py(tv) + 4, "text-anchor": "end", class: "tick" }, NF.format(tv)));
+    }
+    var dl = function (k) { return new Date(start + k * DAY).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }); };
+    svg.appendChild(s("text", { x: L, y: H - 6, "text-anchor": "start", class: "tick" }, dl(0)));
+    svg.appendChild(s("text", { x: W - R, y: H - 6, "text-anchor": "end", class: "tick" }, "hoje"));
+    var line = "", area = "";
+    cum.forEach(function (v, k) { line += (k ? "L" : "M") + px(k) + "," + py(v); });
+    area = line + "L" + px(nd - 1) + "," + py(0) + "L" + px(0) + "," + py(0) + "Z";
+    svg.appendChild(s("path", { d: area, fill: "var(--ok)", "fill-opacity": "0.12" }));
+    svg.appendChild(s("path", { d: line, fill: "none", stroke: "var(--ok)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    svg.appendChild(s("circle", { cx: px(nd - 1), cy: py(cum[nd - 1]), r: 4, fill: "var(--ok)", stroke: "var(--surface)", "stroke-width": 2 }));
+    var cross = s("line", { x1: 0, x2: 0, y1: T, y2: H - B, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" });
+    svg.appendChild(cross);
+    var hit = s("rect", { x: L - 6, y: 0, width: W - L - R + 12, height: H, fill: "transparent" });
+    hit.addEventListener("mousemove", function (ev) {
+      var rect = svg.getBoundingClientRect(), mx = (ev.clientX - rect.left) * W / rect.width;
+      var k = Math.max(0, Math.min(nd - 1, Math.round((mx - L) / ((W - L - R) / Math.max(1, nd - 1)))));
+      cross.setAttribute("x1", px(k)); cross.setAttribute("x2", px(k)); cross.setAttribute("visibility", "visible");
+      showTip(new Date(start + k * DAY).toLocaleDateString("pt-BR"), [
+        { color: "var(--ok)", label: "Marcados no dia", value: n(daily[k]) },
+        { label: "Total até o dia", value: n(cum[k]) }], ev);
+    });
+    hit.addEventListener("mouseleave", function () { cross.setAttribute("visibility", "hidden"); hideTip(); });
+    svg.appendChild(hit);
+    box.appendChild(svg);
+  }
+
+  // Caixa "Bloqueei" de um produto
+  function mkBox(i) {
+    var p = ST.cur.D.P[i], e = mkOf(i), k = mkKey(p[0], p[1]);
+    var inp = h("input", { type: "checkbox", "data-mk": k, "aria-label": (e ? "Desmarcar " : "Marcar como bloqueado ") + p[1] + " " + p[2], disabled: MK.readonly });
+    inp.checked = !!e;
+    inp.addEventListener("change", function () { MK.refocus = k; setMarks([i], inp.checked); });
+    return h("label", { cls: "mk", title: e ? "Marcado como bloqueado em " + dt(mkWhen(e), true) + ". Clique para desmarcar." : "Marque quando bloquear este produto no Protheus",
+      onclick: function (ev) { ev.stopPropagation(); }, onkeydown: function (ev) { ev.stopPropagation(); } }, [inp, h("span", { cls: "box", "aria-hidden": "true" })]);
+  }
+  function mkAllBox(slice) {
+    var all = slice.length && slice.every(function (i) { return !!mkOf(i); }), some = slice.some(function (i) { return !!mkOf(i); });
+    var inp = h("input", { type: "checkbox", "aria-label": all ? "Desmarcar todos desta página" : "Marcar todos desta página como bloqueados", disabled: MK.readonly || !slice.length });
+    inp.checked = !!all; inp.indeterminate = !all && some;
+    inp.addEventListener("change", function () { setMarks(slice, inp.checked); });
+    return h("label", { cls: "mk", title: all ? "Desmarcar todos desta página" : "Marcar todos desta página" }, [inp, h("span", { cls: "box", "aria-hidden": "true" })]);
+  }
+
+  // ---------- marcações: navegador + dados/bloqueios.json ----------
+  var MarkStore = {
+    start: function () { Marcas.iniciar(onMarks); },
+    save: function (items) { return Marcas.salvar(items); },
+    hint: function () {
+      var p = Marcas.pendentes();
+      return p ? (p === 1 ? "1 marcação só neste navegador" : n(p) + " marcações só neste navegador") : "As marcações salvam sozinhas";
+    },
+    savedText: "Salvo neste navegador",
+    note: "marque na lista os produtos que você bloqueou no Protheus. Fica salvo neste navegador na hora; envie ao GitHub para todos verem.",
+    why: function (e) { return e && e.message ? " (" + e.message + ")" : ""; },
+    extra: function () {
+      var p = Marcas.pendentes();
+      if (!p) return [];
+      return [h("button", { cls: "btn small", type: "button", title: "Baixar o bloqueios.json para enviar ao repositório",
+        text: "Enviar ao GitHub (" + n(p) + ")", onclick: function () { openPublish(); } })];
+    }
+  };
+
   // ---------- tables ----------
   var TABS = [
     { k: "saldo", label: "Com saldo e similar", sub: "Produtos com saldo em estoque que têm um similar cadastrado" },
@@ -509,6 +765,7 @@
         else if (I.cat[i] !== sit) continue;
       }
       if (ST.tipo && P[i][3] !== ST.tipo) continue;
+      if (MK.on && ST.mk) { var mkd = !!mkOf(i); if (ST.mk === "nao" ? mkd : ST.mk === "sim" ? !mkd : !mkConf(i)) continue; }
       if (ST.q && cur.search[i].indexOf(ST.q) < 0) continue;
       out.push(i);
     }
@@ -548,11 +805,18 @@
     ST.cur.tipos.forEach(function (t) { ft.appendChild(h("option", { value: t, text: "Tipo " + t })); });
     if (ST.cur.tipos.indexOf(ST.tipo) < 0) ST.tipo = "";
     ft.value = ST.tipo;
+    var fm = $("fMk"); fm.hidden = !MK.on;
+    if (!fm.options.length) [["", "Marcados e não marcados"], ["nao", "Ainda não marcados"], ["sim", "Marcados como bloqueados"], ["conf", "Marcados · a conferir"]]
+      .forEach(function (o) { fm.appendChild(h("option", { value: o[0], text: o[1] })); });
+    if (!/^(|nao|sim|conf)$/.test(ST.mk)) setMk("");
+    fm.value = ST.mk;
     var tab = TABS.filter(function (t) { return t.k === ST.tab; })[0] || TABS[0];
     var fx = BANDS.filter(function (b) { return ST.bands[b.k]; }).map(function (b) { return b.label; });
     var sitLbl = ST.sit === "prot" ? "não bloquear" : ST.sit === "livre" ? "podem ser bloqueados" : ST.sit ? SIT[ST.sit].label.toLowerCase() : "";
     $("tblSub").textContent = tab.sub + " · " + scopeName(ST.scope) + (fx.length < BANDS.length ? " · faixa " + (fx.length ? fx.join(", ") : "nenhuma") : "") +
-      (sitLbl && ST.tab === "prod" ? " · " + sitLbl : "") + ". Clique num produto para ver todos os similares.";
+      (sitLbl && ST.tab === "prod" ? " · " + sitLbl : "") +
+      (MK.on && ST.mk ? " · " + { nao: "ainda não marcados", sim: "marcados como bloqueados", conf: "marcados antes da medição e ainda ativos" }[ST.mk] : "") +
+      ". Clique num produto para ver todos os similares" + (MK.on && !MK.readonly ? "; marque a caixa quando bloquear no Protheus." : ".");
   }
 
   function prodCell(i, compact) {
@@ -585,50 +849,69 @@
   }
   function productAction(i) {
     var I = ST.cur.R.info, P = ST.cur.D.P;
-    var nbs = neighbors(i), keep = null;
+    var nbs = neighbors(i), keep = null, e = mkOf(i);
+    if (e) {
+      var kids = [h("span", { cls: "apill done", text: "Bloqueado" }), h("span", { cls: "p-meta", text: "marcado em " + dt(mkWhen(e), true) })];
+      if (I.prot[i]) kids.push(h("span", { cls: "mk-warn", text: "Atenção: tem saldo, previsão ou ponto de pedido" }));
+      if (nbs.length && nbs.every(function (x) { return !!mkOf(x[0]); })) kids.push(h("span", { cls: "mk-warn", text: "Todos os similares também foram marcados. Confira se um deles fica ativo." }));
+      return h("div", { cls: "act" }, kids);
+    }
     if (I.prot[i]) {
-      var why = I.saldo[i] !== 0 ? "tem saldo" : I.prev[i] > 0 ? "tem previsão de chegada" : "tem ponto de pedido", free = null;
-      for (var f = 0; f < nbs.length; f++) if (!I.prot[nbs[f][0]]) { free = nbs[f][0]; break; }
-      var sub = free != null ? why + " · o similar " + P[free][1] + " pode ser bloqueado" : why + " · o similar também está em uso";
+      var why = I.saldo[i] !== 0 ? "tem saldo" : I.prev[i] > 0 ? "tem previsão de chegada" : "tem ponto de pedido", free = null, freeMk = 0;
+      for (var f = 0; f < nbs.length; f++) if (!I.prot[nbs[f][0]]) { if (mkOf(nbs[f][0])) { freeMk++; continue; } free = nbs[f][0]; break; }
+      var sub = free != null ? why + " · o similar " + P[free][1] + " pode ser bloqueado"
+        : freeMk ? why + " · o similar livre já foi marcado como bloqueado" : why + " · o similar também está em uso";
       return h("div", { cls: "act" }, [h("span", { cls: "apill keep", text: "Não bloquear" }), h("span", { cls: "p-meta", text: sub })]);
     }
-    for (var k = 0; k < nbs.length; k++) if (I.prot[nbs[k][0]]) { keep = nbs[k][0]; break; }
+    var open = nbs.filter(function (x) { return !mkOf(x[0]); });
+    if (nbs.length && !open.length) return h("div", { cls: "act" }, [h("span", { cls: "apill keep", text: "Manter este" }), h("span", { cls: "p-meta", text: "os similares já foram marcados como bloqueados" })]);
+    for (var k = 0; k < open.length; k++) if (I.prot[open[k][0]]) { keep = open[k][0]; break; }
     if (keep != null) return h("div", { cls: "act" }, [h("span", { cls: "apill block", text: "Bloquear" }), h("span", { cls: "p-meta", text: "manter " + P[keep][1] + " (em uso)" })]);
-    var other = nbs.length ? nbs[0][0] : -1, k2 = other >= 0 ? keepChoice(i, other) : i;
-    var sub = k2 === i ? "sugestão: manter este" : "sugestão: manter " + P[k2][1];
-    return h("div", { cls: "act" }, [h("span", { cls: "apill choose", text: "Escolher qual manter" }), h("span", { cls: "p-meta", text: sub })]);
+    var other = open.length ? open[0][0] : -1, k2 = other >= 0 ? keepChoice(i, other) : i;
+    var sub2 = k2 === i ? "sugestão: manter este" : "sugestão: manter " + P[k2][1];
+    return h("div", { cls: "act" }, [h("span", { cls: "apill choose", text: "Escolher qual manter" }), h("span", { cls: "p-meta", text: sub2 })]);
   }
 
   function renderTable() {
-    var tbl = $("tbl"); tbl.textContent = "";
-    var list = currentList(), I = ST.cur.R.info, P = ST.cur.D.P;
+    var tbl = $("tbl"), ae = document.activeElement;
+    var keepFocus = MK.refocus || (ae && tbl.contains(ae) && ae.getAttribute("data-mk")) || null;
+    tbl.textContent = "";
+    var list = currentList(), I = ST.cur.R.info, P = ST.cur.D.P, mkOn = MK.on;
     var pages = Math.max(1, Math.ceil(list.length / PAGE));
     if (ST.page >= pages) ST.page = pages - 1;
     var slice = list.slice(ST.page * PAGE, ST.page * PAGE + PAGE);
-    var head = ["Produto", "Situação", "Similar mais parecido", "Similares", "O que fazer"], body = h("tbody");
+    var head = (mkOn ? ["Bloqueei"] : []).concat(["Produto", "Situação", "Similar mais parecido", "Similares", "O que fazer"]), body = h("tbody");
+    var numCol = mkOn ? 4 : 3;
     slice.forEach(function (i) {
-      var bp = I.bestP[i];
-      var tr = h("tr", { cls: "prod-row", tabindex: "0", "aria-expanded": String(ST.expanded === i),
+      var bp = I.bestP[i], done = mkOn && !!mkOf(i);
+      var tr = h("tr", { cls: "prod-row" + (done ? " is-done" : ""), tabindex: "0", "aria-expanded": String(ST.expanded === i),
         onclick: function () { ST.expanded = ST.expanded === i ? null : i; renderTable(); },
-        onkeydown: function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ST.expanded = ST.expanded === i ? null : i; renderTable(); } } }, [
+        onkeydown: function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ST.expanded = ST.expanded === i ? null : i; renderTable(); } } },
+        (mkOn ? [h("td", { cls: "mkc" }, [mkBox(i)])] : []).concat([
         h("td", null, [prodCell(i)]),
         h("td", null, [statusTags(i, true)]),
         h("td", null, bp >= 0 ? [h("div", { cls: "sim" }, [scorePill(I.best[i]), h("div", null, [prodCell(bp, true), statusTags(bp)])])] : []),
         h("td", { cls: "r num", text: n(nSim(i)) }),
         h("td", null, [productAction(i)])
-      ]);
+      ]));
       body.appendChild(tr);
       if (ST.expanded === i) {
         var all = neighbors(i), nbs = all.slice(0, 40);
         var sims = h("div", { cls: "sims" }, nbs.map(function (x) {
-          return h("div", { cls: "s" }, [h("div", null, [scorePill(x[1])]), h("div", null, [prodCell(x[0], false), statusTags(x[0], true)])]);
+          var dn = mkOn && !!mkOf(x[0]);
+          return h("div", { cls: "s" + (mkOn ? " with-mk" : "") + (dn ? " is-done" : "") }, (mkOn ? [h("div", null, [mkBox(x[0])])] : []).concat([
+            h("div", null, [scorePill(x[1])]),
+            h("div", null, [prodCell(x[0], false), statusTags(x[0], true), dn ? h("span", { cls: "p-meta mk-ok", text: "Marcado como bloqueado em " + dt(mkWhen(mkOf(x[0])), true) }) : null])]));
         }));
         var more = all.length > 40 ? h("p", { cls: "note", text: "Mostrando os 40 mais parecidos de " + n(all.length) + "." }) : null;
-        body.appendChild(h("tr", { cls: "expand" }, [h("td", { colspan: "5" }, [h("div", { cls: "eyebrow", style: "margin-bottom:8px", text: "Todos os similares de " + P[i][1] + " · " + P[i][2] }), sims, more])]));
+        body.appendChild(h("tr", { cls: "expand" }, [h("td", { colspan: String(head.length) }, [h("div", { cls: "eyebrow", style: "margin-bottom:8px", text: "Todos os similares de " + P[i][1] + " · " + P[i][2] }), sims, more])]));
       }
     });
-    tbl.appendChild(h("thead", null, [h("tr", null, head.map(function (x, j) { return h("th", { cls: j === 3 ? "r" : null, text: x }); }))]));
-    if (!slice.length) body.appendChild(h("tr", null, [h("td", { colspan: String(head.length), cls: "empty", text: "Nenhum produto com estes filtros." })]));
+    tbl.appendChild(h("thead", null, [h("tr", null, head.map(function (x, j) {
+      if (mkOn && j === 0) return h("th", { cls: "mkc" }, [h("div", { cls: "mk-th" }, [mkAllBox(slice), h("span", { text: x })])]);
+      return h("th", { cls: j === numCol ? "r" : null, text: x });
+    }))]));
+    if (!slice.length) body.appendChild(h("tr", null, [h("td", { colspan: String(head.length), cls: "empty", text: ST.mk === "nao" && MK.on && !ST.q ? "Nenhum produto falta marcar com estes filtros." : "Nenhum produto com estes filtros." })]));
     tbl.appendChild(body);
     var pg = $("pager"); pg.textContent = "";
     pg.appendChild(h("span", { cls: "num", text: list.length ? (n(ST.page * PAGE + 1) + "–" + n(Math.min(list.length, (ST.page + 1) * PAGE)) + " de " + n(list.length) + " produtos") : "0 produtos" }));
@@ -636,6 +919,11 @@
       h("button", { cls: "btn small", type: "button", disabled: ST.page === 0, text: "← Anterior", onclick: function () { ST.page--; ST.expanded = null; renderTable(); } }),
       h("button", { cls: "btn small", type: "button", disabled: ST.page >= pages - 1, text: "Próxima →", onclick: function () { ST.page++; ST.expanded = null; renderTable(); } })
     ]));
+    MK.refocus = null;
+    if (keepFocus) {
+      var el = Array.prototype.filter.call(tbl.querySelectorAll("input[data-mk]"), function (x) { return x.getAttribute("data-mk") === keepFocus; })[0];
+      if (el) el.focus({ preventScroll: true });
+    }
   }
 
   // ---------- exportar Excel ----------
@@ -649,11 +937,11 @@
         return D.filiais[x[0]] + ": " + (x[1] ? "saldo " + r3(x[1]) : "") + (x[1] && x[2] ? ", " : "") + (x[2] ? "prev. " + r3(x[2]) : ""); }).join(" · ");
     }
     var headers = ["Empresa", "Código", "Descrição", "Tipo", "Grupo", "UM", "Saldo", "Previsão de chegada", "Ponto de pedido", "Situação",
-      "Maior similaridade %", "Faixa", "Código similar", "Descrição similar", "Situação similar", "Qtd. similares", "O que fazer", "Onde tem saldo/previsão"];
+      "Maior similaridade %", "Faixa", "Código similar", "Descrição similar", "Situação similar", "Qtd. similares", "O que fazer", "Onde tem saldo/previsão"].concat(MK.on ? ["Bloqueado no app", "Marcado em"] : []);
     list.forEach(function (i) {
       var bp = I.bestP[i], act = productAction(i), acao = Array.prototype.map.call(act.childNodes, function (c) { return c.textContent; }).join(" — ");
       rows.push([P[i][0], P[i][1], P[i][2], P[i][3], P[i][4], P[i][5], r3(I.saldo[i]), r3(I.prev[i]), r3(I.pp[i]), sitText(i), I.best[i], BAND[I.band[i]].label,
-        bp >= 0 ? P[bp][1] : "", bp >= 0 ? P[bp][2] : "", bp >= 0 ? sitText(bp) : "", nSim(i), acao, ondeTem(P[i][8])]);
+        bp >= 0 ? P[bp][1] : "", bp >= 0 ? P[bp][2] : "", bp >= 0 ? sitText(bp) : "", nSim(i), acao, ondeTem(P[i][8])].concat(MK.on ? [mkOf(i) ? "Sim" : "Não", mkOf(i) ? dt(mkWhen(mkOf(i)), true) : ""] : []));
     });
     return { headers: headers, rows: rows };
   }
@@ -664,6 +952,7 @@
     try {
       var t = tabelaExportar();
       var nomes = { saldo: ["com_saldo", "Com saldo e similar"], prod: ["produtos", "Produtos com similar"] }[ST.tab] || ["produtos", "Produtos com similar"];
+      if (MK.on && ST.mk) nomes = [nomes[0] + "_" + { nao: "nao_marcados", sim: "marcados", conf: "a_conferir" }[ST.mk], nomes[1]];
       var scopeTag = "empresa" + ST.scope.slice(2);
       var blob = await XlsxWriter.build({ sheet: nomes[1], headers: t.headers, rows: t.rows });
       await salvarArquivo("duplicidade_" + nomes[0] + "_" + scopeTag + "_" + ST.cur.D.at.slice(0, 10) + ".xlsx", blob);
@@ -876,6 +1165,10 @@
     lista.appendChild(linhaArquivo("historico.json", "dados/", function () {
       Armazem.baixar("historico.json", JSON.stringify(historico, null, 1), "application/json");
     }));
+    var pendMk = Marcas.pendentes();
+    if (pendMk) lista.appendChild(linhaArquivo("bloqueios.json", "dados/", function () {
+      Armazem.baixar("bloqueios.json", JSON.stringify(Marcas.paraPublicar()), "application/json");
+    }));
     locais.forEach(function (m) {
       lista.appendChild(linhaArquivo(m.arquivo, "dados/medicoes/", async function () {
         try { var D = await Armazem.detalhe(m); Armazem.baixar(m.arquivo, JSON.stringify(D), "application/json"); }
@@ -886,14 +1179,16 @@
     var esc = function (ev) { if (ev.key === "Escape") close(); };
     var steps = h("ol", { cls: "steps", style: "padding-left:18px;margin:0" }, [
       h("li", { text: "Baixe os arquivos acima." }),
-      h("li", { text: "No GitHub, abra a pasta dados do repositório → Add file → Upload files → solte o historico.json → Commit changes." }),
+      h("li", { text: "Jeito mais fácil: dê dois cliques no PUBLICAR.bat. Ele pega os arquivos na pasta Downloads, coloca cada um no lugar e publica." }),
+      h("li", { text: "Ou, no site do GitHub: abra a pasta dados do repositório → Add file → Upload files → solte o historico.json" + (pendMk ? " e o bloqueios.json" : "") + " → Commit changes." }),
       h("li", { text: "Abra a pasta dados/medicoes → Add file → Upload files → solte o(s) arquivo(s) s….json → Commit changes." }),
-      h("li", { text: "Em 1 a 2 minutos o site publicado mostra a medição para todo mundo. Até lá ela aparece só neste navegador." })]);
+      h("li", { text: "Em 1 a 2 minutos o site publicado mostra tudo para todo mundo. Até lá as novidades aparecem só neste navegador." })]);
     var panel = h("div", { cls: "drawer", role: "dialog", "aria-modal": "true", "aria-label": "Enviar ao GitHub" }, [
-      h("div", { cls: "eyebrow", text: "Publicar medição" }),
+      h("div", { cls: "eyebrow", text: "Publicar no site" }),
       h("h2", { text: "Enviar ao GitHub" }),
       aviso ? h("ul", { cls: "warnlist" }, [h("li", { text: aviso })]) : null,
-      h("p", { cls: "note", style: "font-size:13px", text: locais.length ? "A medição foi salva neste navegador. Para ela entrar no histórico do site, envie estes arquivos ao repositório:" : "Não há medições pendentes neste navegador. O historico.json abaixo é o mesmo que já está no repositório." }),
+      h("p", { cls: "note", style: "font-size:13px", text: (locais.length ? "A medição foi salva neste navegador. Para ela entrar no histórico do site, envie estes arquivos ao repositório." : "Não há medições pendentes neste navegador; o historico.json abaixo é o mesmo que já está no repositório.") +
+        (pendMk ? " O bloqueios.json leva as " + (pendMk === 1 ? "1 marcação feita" : n(pendMk) + " marcações feitas") + " neste navegador." : "") }),
       lista, steps,
       h("div", { cls: "actions" }, [h("button", { cls: "btn", type: "button", text: "Fechar", onclick: close })])]);
     var bg = h("div", { cls: "drawer-bg", onclick: function (ev) { if (ev.target === bg) close(); } }, [panel]);

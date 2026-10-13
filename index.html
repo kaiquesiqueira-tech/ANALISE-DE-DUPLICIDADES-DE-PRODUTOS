@@ -39,7 +39,7 @@
     <ol class="howto" aria-label="Como usar">
       <li>Escolha a empresa</li>
       <li>Clique num indicador ou num número de “Onde agir”</li>
-      <li>Confira a lista e exporte para Excel</li>
+      <li>Marque na lista o que você bloqueou — salva sozinho</li>
     </ol>
   </div>
 
@@ -54,6 +54,21 @@
 <template id="tplMain">
   <section class="kpis" id="kpis" aria-label="Indicadores"></section>
   <div class="inat-note" id="inatNote" hidden></div>
+
+  <section class="panel" id="pProg" hidden>
+    <div class="prog-head">
+      <div class="panel-h">
+        <h2>Andamento dos bloqueios</h2>
+        <p id="progSub"></p>
+      </div>
+      <div class="actions" id="progActions"></div>
+    </div>
+    <div class="prog-body">
+      <div id="progMain"></div>
+      <div id="progStats"></div>
+      <div class="chart" id="progChart"></div>
+    </div>
+  </section>
 
   <div class="grid-act">
     <section class="panel" id="pMatrix">
@@ -88,7 +103,9 @@
       <span id="bandToggles" class="tools"></span>
       <select id="fSit" aria-label="Situação"></select>
       <select id="fTipo" aria-label="Tipo de produto"></select>
+      <select id="fMk" aria-label="Marcação de bloqueio" hidden></select>
       <span class="spacer"></span>
+      <span class="savestate" id="saveState" role="status" aria-live="polite" hidden></span>
       <button class="btn small" id="btnCsv" type="button" hidden><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12M6 10l6 6 6-6M4 20h16"/></svg>Exportar Excel</button>
     </div>
     <div class="tbl-wrap"><table class="t" id="tbl"></table></div>
@@ -130,6 +147,7 @@
       <p>Faixas: <strong>95–100%</strong> provável duplicidade · <strong>80–94%</strong> alta semelhança, conferir. Abaixo de 80% o par não aparece.</p>
       <p><strong>Não bloquear</strong>: o produto tem saldo atual diferente de zero (SB2), previsão de chegada (Qtd. prevista no SB2) ou ponto de pedido (SBZ). <strong>Pode bloquear</strong>: não tem nenhum dos três. Se o similar dele está em uso, bloqueie este e mantenha o similar; se o similar também está livre, escolha qual manter.</p>
       <p>Inativos: produto da SB1 com <strong>Ativo = N</strong> (ou Bloqueado = Sim, quando a coluna vier na exportação) é tratado como bloqueado e fica fora da análise. O aviso abaixo dos indicadores mostra quantos são e se algum ainda tem movimento.</p>
+      <p>Marcação de bloqueio: a caixa “Bloqueei” de cada produto registra que ele foi bloqueado no Protheus. A marcação vale por empresa e código e continua nas próximas medições. Quando a SB1 nova chega com o produto inativo (Ativo = N), ele conta como <strong>confirmado na base</strong>; se ele foi marcado antes da medição e ainda está ativo, aparece como <strong>a conferir</strong>.</p>
       <p>Empresas: a 02 e a 10 têm cada uma o seu cadastro (SB1). O mesmo código pode ter descrições diferentes em cada empresa, então a comparação, o saldo, a previsão e o ponto de pedido são sempre calculados dentro da mesma empresa.</p>
       <p>Onde ficam os dados: as medições publicadas estão na pasta <code>dados/</code> do repositório. Uma medição salva e ainda não enviada ao GitHub fica só no navegador de quem a gerou.</p>
     </div>
@@ -137,6 +155,7 @@
 </template>
 
 <div class="tip" id="tip" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <div id="drawerHost"></div>
 
 <script src="js/simcore.js"></script>

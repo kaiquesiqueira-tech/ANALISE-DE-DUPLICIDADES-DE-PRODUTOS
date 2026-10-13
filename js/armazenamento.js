@@ -109,3 +109,41 @@ var Armazem = (function () {
   return { listar: listar, detalhe: detalhe, salvarLocal: salvarLocal, excluirLocal: excluirLocal,
     historicoParaPublicar: historicoParaPublicar, baixar: baixar };
 })();
+
+// ===== Marcações de bloqueio =====
+// 1) No repositório: dados/bloqueios.json — todo mundo que abre o site vê.
+// 2) Neste navegador (localStorage): marcações feitas aqui e ainda não enviadas ao GitHub.
+// Cada marcação: { on, d: quando marcou, t: última alteração }. Na junção vale a de "t" mais recente.
+var Marcas = (function () {
+  var CHAVE = "dup:marcas:v1", repo = {}, local = {}, ouvinte = null;
+  function lerLocal() { try { var j = JSON.parse(localStorage.getItem(CHAVE) || "{}"); return j && typeof j === "object" ? j : {}; } catch (e) { return {}; } }
+  function gravarLocal() { try { localStorage.setItem(CHAVE, JSON.stringify(local)); return true; } catch (e) { return false; } }
+  function valida(e) { return e && typeof e === "object" && typeof e.t === "string"; }
+  function juntar() {
+    var m = {}, k;
+    for (k in repo) if (valida(repo[k])) m[k] = repo[k];
+    for (k in local) if (valida(local[k]) && (!m[k] || local[k].t > m[k].t)) m[k] = local[k];
+    return m;
+  }
+  async function iniciar(fn) {
+    ouvinte = fn; local = lerLocal();
+    try {
+      var r = await fetch("dados/bloqueios.json", { cache: "no-store" });
+      if (r.ok) { var j = await r.json(); repo = (j && j.m) || {}; }
+    } catch (e) { repo = {}; }
+    // o que já chegou ao repositório sai do navegador
+    var mudou = false;
+    Object.keys(local).forEach(function (k) { var a = repo[k]; if (!valida(local[k]) || (valida(a) && a.t >= local[k].t)) { delete local[k]; mudou = true; } });
+    if (mudou) gravarLocal();
+    fn(juntar());
+  }
+  function salvar(itens) {
+    itens.forEach(function (it) { local[it.emp + "|" + it.cod] = it.e; });
+    var ok = gravarLocal();
+    if (ouvinte) ouvinte(juntar());
+    return ok ? Promise.resolve() : Promise.reject({ code: "storage", message: "o navegador não deixou guardar; baixe o bloqueios.json antes de fechar a página" });
+  }
+  function pendentes() { return Object.keys(local).length; }
+  function paraPublicar() { return { v: 1, at: new Date().toISOString(), m: juntar() }; }
+  return { iniciar: iniciar, salvar: salvar, pendentes: pendentes, paraPublicar: paraPublicar };
+})();
