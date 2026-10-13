@@ -7,19 +7,22 @@
 <meta name="description" content="Duplicidades de cadastro do Protheus (SB1 × SBZ × SB2): faixas de similaridade, o que não bloquear, status por empresa e evolução.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="css/estilo.css">
 </head>
 <body>
 <div class="wrap" id="app">
   <header class="top">
-    <div>
-      <div class="eyebrow">Protheus · Almoxarifado · SB1 × SBZ × SB2</div>
-      <h1>Duplicidade de Cadastro</h1>
-      <div class="meta" id="meta">Carregando a última medição…</div>
+    <div class="brand">
+      <div class="mark" aria-hidden="true"><i></i><i></i></div>
+      <div>
+        <h1>Duplicidade de Cadastro</h1>
+        <div class="tagline">Produtos cadastrados em dobro no Protheus e o que pode ser bloqueado com segurança.</div>
+        <div class="meta" id="meta">Carregando a última medição…</div>
+      </div>
     </div>
     <div class="actions">
-      <button class="btn primary" id="btnUpload" type="button">Atualizar base</button>
+      <button class="btn primary" id="btnUpload" type="button" hidden><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg>Atualizar base</button>
     </div>
   </header>
 
@@ -31,7 +34,14 @@
     </div>
   </div>
 
-  <nav class="scope" id="scope" aria-label="Escopo"></nav>
+  <div class="topbar">
+    <nav class="scope" id="scope" aria-label="Empresa"></nav>
+    <ol class="howto" aria-label="Como usar">
+      <li>Escolha a empresa</li>
+      <li>Clique num indicador ou num número de “Onde agir”</li>
+      <li>Confira a lista e exporte para Excel</li>
+    </ol>
+  </div>
 
   <div id="main">
     <div class="loading" id="loading">
@@ -43,19 +53,20 @@
 
 <template id="tplMain">
   <section class="kpis" id="kpis" aria-label="Indicadores"></section>
+  <div class="inat-note" id="inatNote" hidden></div>
 
-  <div class="grid2">
+  <div class="grid-act">
     <section class="panel" id="pMatrix">
       <div class="panel-h">
-        <h2>Faixa de similaridade × situação</h2>
-        <p>Produtos com ao menos um similar, pela maior similaridade. Clique para listar.</p>
+        <h2>Onde agir</h2>
+        <p>Produtos com similar, pela faixa de semelhança e pela situação. Clique num número para ver os produtos.</p>
       </div>
       <div class="mx-wrap" id="matrix"></div>
-      <p class="note">“Não bloquear” considera saldo, previsão de chegada e ponto de pedido em qualquer filial da empresa — o bloqueio do cadastro (SB1) vale para a empresa inteira.</p>
+      <p class="note">Saldo, previsão de chegada e ponto de pedido são procurados em todas as filiais da empresa, porque o bloqueio do cadastro (SB1) vale para a empresa inteira.</p>
     </section>
     <section class="panel" id="pEvo">
       <div class="panel-h">
-        <h2>Evolução das medições</h2>
+        <h2>Evolução</h2>
         <p id="evoSub">Produtos com similar, por faixa</p>
       </div>
       <div class="legend" id="evoLegend"></div>
@@ -64,11 +75,31 @@
     </section>
   </div>
 
+  <section class="panel" id="pTables">
+    <div class="list-head">
+      <div class="panel-h">
+        <h2>Produtos</h2>
+        <p id="tblSub"></p>
+      </div>
+      <div class="tabs" role="tablist" id="tabs"></div>
+    </div>
+    <div class="tools" id="tools">
+      <label class="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input type="search" id="q" placeholder="Buscar código ou descrição" aria-label="Buscar código ou descrição"></label>
+      <span id="bandToggles" class="tools"></span>
+      <select id="fSit" aria-label="Situação"></select>
+      <select id="fTipo" aria-label="Tipo de produto"></select>
+      <span class="spacer"></span>
+      <button class="btn small" id="btnCsv" type="button" hidden><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12M6 10l6 6 6-6M4 20h16"/></svg>Exportar Excel</button>
+    </div>
+    <div class="tbl-wrap"><table class="t" id="tbl"></table></div>
+    <div class="pager" id="pager"></div>
+  </section>
+
   <div class="grid2">
     <section class="panel">
       <div class="panel-h">
-        <h2>Similaridade por empresa</h2>
-        <p>Produtos da empresa com similar, pela maior similaridade. Clique para ver a empresa.</p>
+        <h2>Semelhança por empresa</h2>
+        <p>Produtos com similar em cada empresa, pela faixa. Clique numa barra para trocar de empresa.</p>
       </div>
       <div class="legend" id="filBandLegend"></div>
       <div class="chart" id="filBandChart"></div>
@@ -76,34 +107,17 @@
     <section class="panel">
       <div class="panel-h">
         <h2>Situação por empresa</h2>
-        <p>O que pode ou não ser bloqueado</p>
+        <p>O que não pode e o que pode ser bloqueado em cada empresa.</p>
       </div>
       <div class="legend" id="filSitLegend"></div>
       <div class="chart" id="filSitChart"></div>
     </section>
   </div>
 
-  <section class="panel" id="pTables">
-    <div class="panel-h">
-      <h2>Produtos e pares similares</h2>
-      <p id="tblSub"></p>
-    </div>
-    <div class="tabs" role="tablist" id="tabs"></div>
-    <div class="tools" id="tools">
-      <input type="search" id="q" placeholder="Buscar código ou descrição" aria-label="Buscar código ou descrição">
-      <span id="bandToggles" class="tools"></span>
-      <select id="fSit" aria-label="Situação"></select>
-      <select id="fTipo" aria-label="Tipo de produto"></select>
-      <button class="btn small" id="btnCsv" type="button" hidden>Exportar Excel</button>
-    </div>
-    <div class="tbl-wrap"><table class="t" id="tbl"></table></div>
-    <div class="pager" id="pager"></div>
-  </section>
-
   <section class="panel" id="pHist">
     <div class="panel-h">
       <h2>Histórico de medições</h2>
-      <p>Cada atualização da base grava um ponto na evolução</p>
+      <p>Cada atualização da base grava um ponto na evolução.</p>
     </div>
     <div class="hist" id="hist"></div>
   </section>
@@ -111,11 +125,11 @@
   <details class="method">
     <summary>Como a similaridade é calculada</summary>
     <div class="body">
-      <p>Comparo a descrição (B1_DESC) de cada produto ativo com todos os outros produtos da mesma empresa. Antes, tiro acentos, pontuação, zeros à esquerda e a ordem das palavras — “FILTRO P551000 DONALDSON” e “FILTRO DONALDSON P551000” ficam iguais.</p>
-      <p>A similaridade é a parte em comum das duas descrições, de 0 a 100%. Quando as duas têm medidas ou códigos (palavras com números) e eles são diferentes, a similaridade cai: “BOTINA CA-42374 Nº37” e “Nº38” são produtos diferentes e não entram como duplicidade.</p>
+      <p>A descrição (B1_DESC) de cada produto ativo é comparada com todas as outras da mesma empresa. Antes, saem acentos, pontuação, zeros à esquerda e a ordem das palavras — “FILTRO P551000 DONALDSON” e “FILTRO DONALDSON P551000” ficam iguais.</p>
+      <p>A similaridade é a parte em comum das duas descrições, de 0 a 100%. Quando as duas têm medidas, códigos, tamanhos ou cores e eles são diferentes, a similaridade cai: “BOTINA CA-42374 Nº37” e “Nº38” são produtos diferentes e não entram como duplicidade.</p>
       <p>Faixas: <strong>95–100%</strong> provável duplicidade · <strong>80–94%</strong> alta semelhança, conferir. Abaixo de 80% o par não aparece.</p>
-      <p>Situação do produto: <strong>com saldo</strong> (saldo atual diferente de zero no SB2), <strong>previsão de chegada</strong> (Qtd. prevista no SB2 maior que zero), <strong>ponto de pedido</strong> (SBZ maior que zero). Qualquer um deles = não bloquear. Os demais são candidatos: “similar em uso” quando o similar tem saldo, previsão ou ponto de pedido (bloqueie este e mantenha o similar), ou “similar também livre” (escolha qual manter).</p>
-      <p>Inativos: produto da SB1 com <strong>Ativo = N</strong> (ou Bloqueado = Sim, quando a coluna vier na exportação) é tratado como bloqueado. Ele sai da comparação e aparece separado na aba “Inativos (bloqueados)”. Se ainda tiver saldo, previsão de chegada ou ponto de pedido, fica marcado para conferir.</p>
+      <p><strong>Não bloquear</strong>: o produto tem saldo atual diferente de zero (SB2), previsão de chegada (Qtd. prevista no SB2) ou ponto de pedido (SBZ). <strong>Pode bloquear</strong>: não tem nenhum dos três. Se o similar dele está em uso, bloqueie este e mantenha o similar; se o similar também está livre, escolha qual manter.</p>
+      <p>Inativos: produto da SB1 com <strong>Ativo = N</strong> (ou Bloqueado = Sim, quando a coluna vier na exportação) é tratado como bloqueado e fica fora da análise. O aviso abaixo dos indicadores mostra quantos são e se algum ainda tem movimento.</p>
       <p>Empresas: a 02 e a 10 têm cada uma o seu cadastro (SB1). O mesmo código pode ter descrições diferentes em cada empresa, então a comparação, o saldo, a previsão e o ponto de pedido são sempre calculados dentro da mesma empresa.</p>
       <p>Onde ficam os dados: as medições publicadas estão na pasta <code>dados/</code> do repositório. Uma medição salva e ainda não enviada ao GitHub fica só no navegador de quem a gerou.</p>
     </div>
