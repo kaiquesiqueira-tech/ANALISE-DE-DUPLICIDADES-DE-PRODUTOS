@@ -1203,6 +1203,54 @@
     else { mounted = false; showLoading("Nenhuma medição salva ainda. Clique em “Atualizar base” para carregar as planilhas."); $("meta").textContent = "Sem medições."; $("previewBanner").hidden = true; }
   }
 
+  // ---------- instalar como aplicativo ----------
+  // Chrome e Edge (computador e Android) oferecem a instalação; no iPhone/iPad é pelo Safari.
+  (function instalarApp() {
+    var seguro = location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    if ("serviceWorker" in navigator && seguro) {
+      window.addEventListener("load", function () { navigator.serviceWorker.register("sw.js").catch(function () { /* segue sem modo offline */ }); });
+    }
+    var btn = $("btnInstall"); if (!btn) return;
+    var instalado = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+    var ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    var pedido = null;
+    if (instalado || !seguro) return;
+    window.addEventListener("beforeinstallprompt", function (ev) { ev.preventDefault(); pedido = ev; btn.hidden = false; });
+    window.addEventListener("appinstalled", function () {
+      pedido = null; btn.hidden = true;
+      toast("App instalado. Ele abre pelo atalho no menu Iniciar, na área de trabalho ou na tela inicial do celular.");
+    });
+    if (ios) btn.hidden = false;
+    btn.addEventListener("click", async function () {
+      if (pedido) {
+        var p = pedido; pedido = null;
+        p.prompt();
+        try { var r = await p.userChoice; if (r && r.outcome === "accepted") btn.hidden = true; } catch (e) { /* nada */ }
+        return;
+      }
+      ajudaInstalar(ios);
+    });
+  })();
+  function ajudaInstalar(ios) {
+    var host = $("drawerHost"); host.textContent = "";
+    var passos = ios
+      ? ["Abra este site no Safari.", "Toque em Compartilhar (o quadrado com a seta para cima).", "Toque em Adicionar à Tela de Início e depois em Adicionar."]
+      : ["No Chrome ou no Edge, clique no ícone de instalar no fim da barra de endereço (um monitor com uma seta).",
+        "Se o ícone não aparecer, abra o menu do navegador (⋮ ou …) e procure por Instalar ou Aplicativos → Instalar este site como um aplicativo.",
+        "No celular Android, abra o menu ⋮ do Chrome e toque em Instalar app ou Adicionar à tela inicial."];
+    var close = function () { host.textContent = ""; document.removeEventListener("keydown", esc); };
+    var esc = function (ev) { if (ev.key === "Escape") close(); };
+    var panel = h("div", { cls: "drawer", role: "dialog", "aria-modal": "true", "aria-label": "Instalar o app" }, [
+      h("div", { cls: "eyebrow", text: "Aplicativo" }),
+      h("h2", { text: "Instalar o app" }),
+      h("p", { cls: "note", style: "font-size:13px", text: "Instalado, o painel abre numa janela própria, com ícone no menu Iniciar, na área de trabalho ou na tela inicial do celular, e funciona sem internet com a última base que você abriu." }),
+      h("ol", { cls: "steps", style: "padding-left:18px;margin:0" }, passos.map(function (t) { return h("li", { text: t }); })),
+      h("div", { cls: "actions" }, [h("button", { cls: "btn", type: "button", text: "Fechar", onclick: close })])]);
+    var bg = h("div", { cls: "drawer-bg", onclick: function (ev) { if (ev.target === bg) close(); } }, [panel]);
+    host.appendChild(bg);
+    document.addEventListener("keydown", esc);
+  }
+
   $("btnUpload").addEventListener("click", openDrawer);
   $("btnSave").addEventListener("click", savePreview);
   $("btnDiscard").addEventListener("click", discardPreview);
