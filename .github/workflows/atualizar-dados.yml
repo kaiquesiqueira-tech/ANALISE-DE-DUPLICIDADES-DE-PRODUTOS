@@ -1,5 +1,6 @@
-# Opção automática: ao enviar planilhas novas para a pasta planilhas/,
+# Opção C: ao enviar planilhas pelo site do GitHub para a pasta planilhas/,
 # o GitHub processa, grava a medição em dados/ e o site atualiza sozinho.
+# (Pelo PUBLICAR.bat as planilhas não sobem: ele processa no computador e envia só dados/.)
 name: Atualizar medição de duplicidade
 
 on:

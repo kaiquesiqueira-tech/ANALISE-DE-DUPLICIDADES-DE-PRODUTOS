@@ -2,3 +2,6 @@
 .DS_Store
 Thumbs.db
 node_modules/
+# Planilhas do Protheus ficam só no computador (o PUBLICAR processa e envia só o resultado)
+planilhas/*
+!planilhas/LEIA-ME.md

@@ -1056,7 +1056,8 @@
       h("div", { cls: "eyebrow", text: "Nova medição" }),
       h("h2", { text: "Atualizar base" }),
       h("p", { cls: "note", style: "font-size:13px", text: "Exporte do Protheus e carregue juntas: a SB1, a SBZ e o Saldo Físico (SB2) de todas as empresas. O painel identifica cada planilha sozinho, compara as descrições e mostra uma prévia antes de salvar no histórico." }),
-      input, drop, list, warns, steps, h("div", { cls: "actions" }, [cancel, go])]);
+      input, drop, list, warns, steps, h("div", { cls: "actions" }, [cancel, go]),
+      h("p", { cls: "note", style: "font-size:12.5px;border-top:1px solid var(--line);padding-top:12px", text: "Atalho: no computador que publica o site, coloque as planilhas na pasta planilhas do app e dê dois cliques no PUBLICAR.bat. Ele calcula a medição e publica de uma vez, sem passar por esta janela." })]);
     var bg = h("div", { cls: "drawer-bg", onclick: function (ev) { if (ev.target === bg && !UP.running) closeDrawer(); } }, [panel]);
     host.appendChild(bg);
     input.addEventListener("change", function () { addFiles(input.files); input.value = ""; });

@@ -1,6 +1,10 @@
-# Planilhas do Protheus (opção automática)
+# Planilhas do Protheus
 
-Coloque aqui as exportações do Protheus — **SB1**, **SBZ** e **Saldo Físico (SB2)** de cada empresa (.xlsx ou .csv) — e faça o commit.
-O GitHub Actions processa tudo e grava a nova medição em `dados/`. Em poucos minutos o site mostra o novo ponto na evolução.
+Coloque aqui as exportações do Protheus — **SB1**, **SBZ** e **Saldo Físico (SB2)** de cada empresa (.xlsx ou .csv) — e dê dois cliques no **PUBLICAR.bat**.
 
-Para substituir uma exportação antiga, envie o arquivo novo com o **mesmo nome**.
+- O nome dos arquivos não importa: o PUBLICAR identifica cada planilha sozinho.
+- Ele calcula a medição no computador, grava o resultado em `dados/` e publica no GitHub.
+- Depois, as planilhas usadas vão para `processadas/<data>/`, para não serem processadas de novo.
+- As planilhas **não são enviadas ao GitHub**; só o resultado.
+
+Se faltar alguma planilha, se houver duas do mesmo tipo para a mesma empresa ou se alguma estiver aberta no Excel, o PUBLICAR avisa e não publica nada.

@@ -149,7 +149,7 @@
       <p>Inativos: produto da SB1 com <strong>Ativo = N</strong> (ou Bloqueado = Sim, quando a coluna vier na exportação) é tratado como bloqueado e fica fora da análise. O aviso abaixo dos indicadores mostra quantos são e se algum ainda tem movimento.</p>
       <p>Marcação de bloqueio: a caixa “Bloqueei” de cada produto registra que ele foi bloqueado no Protheus. A marcação vale por empresa e código e continua nas próximas medições. Quando a SB1 nova chega com o produto inativo (Ativo = N), ele conta como <strong>confirmado na base</strong>; se ele foi marcado antes da medição e ainda está ativo, aparece como <strong>a conferir</strong>.</p>
       <p>Empresas: a 02 e a 10 têm cada uma o seu cadastro (SB1). O mesmo código pode ter descrições diferentes em cada empresa, então a comparação, o saldo, a previsão e o ponto de pedido são sempre calculados dentro da mesma empresa.</p>
-      <p>Onde ficam os dados: as medições publicadas estão na pasta <code>dados/</code> do repositório. Uma medição salva e ainda não enviada ao GitHub fica só no navegador de quem a gerou.</p>
+      <p>Onde ficam os dados: as medições publicadas estão na pasta <code>dados/</code> do repositório. Uma medição salva e ainda não enviada ao GitHub fica só no navegador de quem a gerou. Para atualizar, o jeito mais rápido é colocar as planilhas na pasta <code>planilhas</code> do app e rodar o <code>PUBLICAR.bat</code>: ele calcula a medição no computador e publica só o resultado.</p>
     </div>
   </details>
 </template>
