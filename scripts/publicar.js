@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Usado pelo PUBLICAR.bat antes de enviar ao GitHub:
-//   1) traz da pasta Downloads o que o site baixou (historico.json, bloqueios.json, ncm.json, s….json),
+//   1) traz da pasta Downloads o que o site baixou (historico.json, bloqueios.json, ncm.json, grupos.json, s….json),
 //      juntando com o que já está em dados/ (nada do repositório se perde);
 //   2) devolve ao historico.json as medições de dados/medicoes que tinham sumido dele;
 //   3) processa as planilhas da pasta planilhas/ e grava a nova medição em dados/.
@@ -32,7 +32,7 @@ function resumo(txt) {
   if (!a) return;
   const t = String(txt).normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[\u2013\u2014]/g, "-").replace(/\u2192/g, "->").replace(/[\u201c\u201d]/g, "'")
-    .replace(/[&|<>^%"()]/g, " ").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").replace(/ ([.,])/g, "$1").trim().slice(0, 400);
+    .replace(/%/g, " por cento").replace(/[&|<>^"()]/g, " ").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").replace(/ ([.,])/g, "$1").trim().slice(0, 400);
   try { fs.writeFileSync(a, t + "\r\n"); } catch (e) { /* idem */ }
 }
 function lerJson(arq) { return JSON.parse(fs.readFileSync(arq, "utf8").replace(/^\uFEFF/, "")); }
@@ -110,7 +110,25 @@ function importarDownloads(dl) {
     if (melhor && (!atual || !atual.at || melhor.at > atual.at)) { gravarJson(arq, melhor); console.log(`  + dados/ncm.json (${melhor.linhas} códigos)`); n++; }
     else if (melhor) console.log("  ncm.json baixado já estava no repositório.");
   }
-  if (!n && !hs.length && !bs.length && !ns.length) console.log("  Nenhum arquivo baixado pelo site.");
+  // tabelas de grupos: por empresa fica a mais nova (campo "at" de cada empresa)
+  const gs = nomes.filter((f) => /^grupos( \(\d+\))?\.json$/i.test(f));
+  if (gs.length) {
+    const arq = path.join(dados, "grupos.json");
+    let atual = { v: 1, emp: {} }; try { const j = lerJson(arq); if (j && j.emp) atual = j; } catch (e) { /* novo */ }
+    const mudou = [];
+    gs.forEach((f) => {
+      const src = path.join(dl, f);
+      let j; try { j = lerJson(src); } catch (e) { console.log(`  Aviso: ${f} está incompleto; ficou na pasta Downloads.`); return; }
+      Object.keys((j && j.emp) || {}).forEach((e) => {
+        const t = j.emp[e];
+        if (t && t.m && (!atual.emp[e] || !atual.emp[e].at || t.at > atual.emp[e].at)) { atual.emp[e] = t; if (mudou.indexOf(e) < 0) mudou.push(e); }
+      });
+      fs.unlinkSync(src);
+    });
+    if (mudou.length) { atual.at = new Date().toISOString(); gravarJson(arq, atual); console.log(`  + dados/grupos.json (empresa ${mudou.sort().join(" e ")})`); n++; }
+    else console.log("  grupos.json baixado já estava no repositório.");
+  }
+  if (!n && !hs.length && !bs.length && !ns.length && !gs.length) console.log("  Nenhum arquivo baixado pelo site.");
   return n;
 }
 
@@ -146,7 +164,7 @@ function repararHistorico() {
 }
 
 // Código de saída lido pelo PUBLICAR.bat:
-//   0 = medição nova gravada · 10 = nenhuma planilha nova · 11 = só a tabela de NCM
+//   0 = medição nova gravada · 10 = nenhuma planilha nova · 11 = só tabelas de descrição (NCM, grupos)
 //   12 = planilhas com problema (o resto é publicado) · 1 = erro inesperado (nada é publicado)
 (async () => {
   console.log("\n  Arquivos baixados pelo site (pasta Downloads):");
@@ -168,8 +186,9 @@ function repararHistorico() {
     process.exitCode = 12;
     return;
   }
-  if (r.status === "gravou") { resumo("Medição de " + dataBR(r.doc.at) + (r.ncm ? " + tabela de NCM" : "")); process.exitCode = 0; }
-  else if (r.status === "ncm") { console.log("  Só a tabela de NCM foi atualizada (nenhuma medição nova)."); resumo("Tabela de NCM com " + r.ncm.linhas.toLocaleString("pt-BR") + " códigos"); process.exitCode = 11; }
+  const extras = [r.ncm ? "tabela de NCM" : "", r.grupos ? "grupos da empresa " + r.grupos.join(" e ") : ""].filter(Boolean);
+  if (r.status === "gravou") { resumo("Medição de " + dataBR(r.doc.at) + (extras.length ? " + " + extras.join(" + ") : "")); process.exitCode = 0; }
+  else if (r.status === "tabelas") { console.log("  Só as tabelas de descrição foram atualizadas (nenhuma medição nova)."); resumo("Atualizado: " + extras.join(" + ")); process.exitCode = 11; }
   else { resumo(r.motivo || "Nenhuma planilha nova na pasta planilhas."); process.exitCode = 10; }
 })().catch((e) => {
   console.log("\n  [ERRO] Nada foi publicado:\n  " + (e && e.message ? e.message : e));

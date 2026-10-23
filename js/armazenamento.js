@@ -163,3 +163,38 @@ var TabelaNcm = (function () {
   function pendente() { return local(); }
   return { carregar: carregar, guardar: guardar, pendente: pendente };
 })();
+
+// ===== Tabelas de grupos de produto (descrição de cada grupo, por empresa) =====
+// No repositório: dados/grupos.json = { v, emp: { "02": {at, arquivo, linhas, m}, "10": {...} } }.
+// Carregadas pelo site e ainda não enviadas: localStorage, por empresa (vale a mais nova).
+var TabelaGrupos = (function () {
+  var CHAVE = "dup:grupos:v1";
+  function local() { try { return JSON.parse(localStorage.getItem(CHAVE) || "null"); } catch (e) { return null; } }
+  function gravarLocal(obj) {
+    try { if (obj) localStorage.setItem(CHAVE, JSON.stringify(obj)); else localStorage.removeItem(CHAVE); return true; } catch (e) { return false; }
+  }
+  async function doRepositorio() {
+    try { var r = await fetch("dados/grupos.json", { cache: "no-store" }); if (r.ok) { var j = await r.json(); if (j && j.emp) return j; } } catch (e) { /* sem tabela */ }
+    return null;
+  }
+  async function carregar() {
+    var repo = await doRepositorio(), loc = local(), emp = Object.assign({}, repo && repo.emp);
+    if (loc && loc.emp) {
+      var resto = {};
+      Object.keys(loc.emp).forEach(function (e) {
+        var l = loc.emp[e], r = emp[e];
+        if (!l || (r && r.at >= l.at)) return; // essa empresa já chegou ao repositório
+        emp[e] = l; resto[e] = l;
+      });
+      gravarLocal(Object.keys(resto).length ? { v: 1, emp: resto } : null);
+    }
+    return { v: 1, emp: emp };
+  }
+  function guardar(e, tab) { var loc = local() || { v: 1, emp: {} }; loc.emp = loc.emp || {}; loc.emp[e] = tab; return gravarLocal(loc); }
+  function pendente() { var l = local(); return l && l.emp && Object.keys(l.emp).length ? l : null; }
+  async function paraPublicar() {
+    var repo = await doRepositorio(), l = local();
+    return { v: 1, at: new Date().toISOString(), emp: Object.assign({}, repo && repo.emp, l && l.emp) };
+  }
+  return { carregar: carregar, guardar: guardar, pendente: pendente, paraPublicar: paraPublicar };
+})();

@@ -64,7 +64,7 @@ call :acharnode
 if defined NODE goto :passo3
 if defined TEMPLAN goto :semnode
 echo        Sem Node.js: vou publicar so os arquivos baixados pelo site.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Continue'; $dl=$null; try { $dl=(New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path } catch { }; if(-not $dl -or -not (Test-Path -LiteralPath $dl)){ $dl=Join-Path $env:USERPROFILE 'Downloads' }; if(-not (Test-Path -LiteralPath $dl)){ Write-Host '       Pasta Downloads nao encontrada.'; exit 0 }; $med=Join-Path 'dados' 'medicoes'; New-Item -ItemType Directory -Force -Path $med | Out-Null; $n=0; Get-ChildItem -LiteralPath $dl -File | Where-Object { $_.Name -match '^s\d{14}( \(\d+\))?\.json$' } | Sort-Object LastWriteTime | ForEach-Object { $nome=($_.Name -replace ' \(\d+\)',''); Move-Item -LiteralPath $_.FullName -Destination (Join-Path $med $nome) -Force; Write-Host ('       + dados/medicoes/' + $nome); $n++ }; foreach($b in @('historico','bloqueios','ncm')){ $alvo=Join-Path 'dados' ($b+'.json'); $h=Get-ChildItem -LiteralPath $dl -File | Where-Object { $_.Name -match ('^'+$b+'( \(\d+\))?\.json$') } | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if($h){ $ok=$true; try { $j=Get-Content -LiteralPath $h.FullName -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $ok=$false }; if(-not $ok){ Write-Host ('       Aviso: '+$b+'.json baixado esta incompleto - ignorado') } elseif((-not (Test-Path -LiteralPath $alvo)) -or ($h.LastWriteTime -gt (Get-Item -LiteralPath $alvo).LastWriteTime)){ Move-Item -LiteralPath $h.FullName -Destination $alvo -Force; Write-Host ('       + dados/'+$b+'.json'); $n++ } } }; if($n -eq 0){ Write-Host '       Nenhum arquivo novo baixado pelo site.' }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Continue'; $dl=$null; try { $dl=(New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path } catch { }; if(-not $dl -or -not (Test-Path -LiteralPath $dl)){ $dl=Join-Path $env:USERPROFILE 'Downloads' }; if(-not (Test-Path -LiteralPath $dl)){ Write-Host '       Pasta Downloads nao encontrada.'; exit 0 }; $med=Join-Path 'dados' 'medicoes'; New-Item -ItemType Directory -Force -Path $med | Out-Null; $n=0; Get-ChildItem -LiteralPath $dl -File | Where-Object { $_.Name -match '^s\d{14}( \(\d+\))?\.json$' } | Sort-Object LastWriteTime | ForEach-Object { $nome=($_.Name -replace ' \(\d+\)',''); Move-Item -LiteralPath $_.FullName -Destination (Join-Path $med $nome) -Force; Write-Host ('       + dados/medicoes/' + $nome); $n++ }; foreach($b in @('historico','bloqueios','ncm','grupos')){ $alvo=Join-Path 'dados' ($b+'.json'); $h=Get-ChildItem -LiteralPath $dl -File | Where-Object { $_.Name -match ('^'+$b+'( \(\d+\))?\.json$') } | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if($h){ $ok=$true; try { $j=Get-Content -LiteralPath $h.FullName -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $ok=$false }; if(-not $ok){ Write-Host ('       Aviso: '+$b+'.json baixado esta incompleto - ignorado') } elseif((-not (Test-Path -LiteralPath $alvo)) -or ($h.LastWriteTime -gt (Get-Item -LiteralPath $alvo).LastWriteTime)){ Move-Item -LiteralPath $h.FullName -Destination $alvo -Force; Write-Host ('       + dados/'+$b+'.json'); $n++ } } }; if($n -eq 0){ Write-Host '       Nenhum arquivo novo baixado pelo site.' }"
 goto :passo4
 
 :passo3
@@ -125,15 +125,15 @@ if exist "%RESARQ%" set /p RESUMO=<"%RESARQ%"
 echo.
 echo  ==========================================================
 if "%RES%"=="0" echo    BASE ATUALIZADA E PUBLICADA
-if "%RES%"=="11" echo    TABELA DE NCM PUBLICADA - a base de produtos nao mudou
+if "%RES%"=="11" echo    DESCRICOES PUBLICADAS - NCM e grupos; a base de produtos nao mudou
 if "%RES%"=="10" echo    ATENCAO: A BASE NAO FOI ATUALIZADA - nenhuma planilha nova
 if "%RES%"=="12" echo    ATENCAO: A BASE NAO FOI ATUALIZADA - problema nas planilhas
 echo  ==========================================================
 if defined RESUMO echo    %RESUMO%
 if "%RES%"=="10" echo    Coloque SB1, SBZ e Saldo Fisico na pasta planilhas desta pasta e rode de novo.
 if "%RES%"=="12" echo    O motivo completo esta acima e no arquivo PUBLICAR-log.txt.
-if "%RES%"=="10" echo    O resto - marcacoes, tabela de NCM, historico - foi enviado.
-if "%RES%"=="12" echo    O resto - marcacoes, tabela de NCM, historico - foi enviado.
+if "%RES%"=="10" echo    O resto - marcacoes e arquivos baixados pelo site - foi enviado normalmente.
+if "%RES%"=="12" echo    O resto - marcacoes e arquivos baixados pelo site - foi enviado normalmente.
 >> "%LOG%" echo RESULTADO %RES%: %RESUMO%
 echo.
 echo    Registro completo: PUBLICAR-log.txt nesta pasta - mande no chat se algo der errado.

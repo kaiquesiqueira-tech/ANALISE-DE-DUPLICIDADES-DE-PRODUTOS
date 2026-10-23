@@ -73,8 +73,9 @@ async function lerPlanilhas(arquivos) {
     try {
       const t = await DupAnalysis.readTable(blob, nome);
       if (t.kind) {
-        t.arquivo = arq; t.empresas = t.kind === "NCM" ? {} : empresasDa(t); tabelas.push(t);
-        console.log(`  ✓ ${nome}: ${t.label} · ${t.rows.toLocaleString("pt-BR")} linhas` + (t.kind === "NCM" ? "" : ` · empresa ${Object.keys(t.empresas).sort().join(", ") || "?"}`));
+        const tabelaAux = t.kind === "NCM" || t.kind === "GRP";
+        t.arquivo = arq; t.empresas = tabelaAux ? {} : empresasDa(t); tabelas.push(t);
+        console.log(`  ✓ ${nome}: ${t.label} · ${t.rows.toLocaleString("pt-BR")} linhas` + (tabelaAux ? "" : ` · empresa ${Object.keys(t.empresas).sort().join(", ") || "?"}`));
       }
       else { falhas.push(nome); console.log(`  ✗ ${nome}: ${t.error}`); }
     } catch (e) { falhas.push(nome); console.log(`  ✗ ${nome}: não consegui ler (${e.message})`); }
@@ -140,6 +141,41 @@ function gravarTabelaNcm(ncmTabs) {
   return tab;
 }
 
+// Tabelas de grupos (uma por empresa) → dados/grupos.json, usada para mostrar a descrição do grupo.
+// A empresa vem do nome do arquivo e é conferida com os grupos dos produtos (SB1 junto ou última medição):
+// se o nome disser 02 e os grupos forem da 10, nada é gravado.
+function gruposDaUltimaMedicao() {
+  try {
+    const hist = JSON.parse(fs.readFileSync(path.join(raiz, "dados", "historico.json"), "utf8").replace(/^\uFEFF/, ""));
+    const lista = (Array.isArray(hist) ? hist : hist.medicoes || []).filter((m) => m && m.arquivo).sort((a, b) => (a.at < b.at ? -1 : 1));
+    for (let k = lista.length - 1; k >= 0; k--) {
+      const arq = path.join(raiz, "dados", "medicoes", lista[k].arquivo);
+      if (fs.existsSync(arq)) return DupAnalysis.gruposDaMedicao(JSON.parse(fs.readFileSync(arq, "utf8")));
+    }
+  } catch (e) { /* sem medição: vale só o nome do arquivo */ }
+  return {};
+}
+function decidirGrupos(grpTabs, med) {
+  const temSB1 = med.some((t) => t.kind === "SB1");
+  const r = DupAnalysis.decidirGrupos(grpTabs, temSB1 ? DupAnalysis.gruposDaSB1(med) : gruposDaUltimaMedicao());
+  r.avisos.forEach((a) => console.log("  Aviso: " + a));
+  return r;
+}
+function gravarTabelaGrupos(tabelas) {
+  const arq = path.join(raiz, "dados", "grupos.json");
+  let atual = { v: 1, emp: {} };
+  try { const j = JSON.parse(fs.readFileSync(arq, "utf8").replace(/^\uFEFF/, "")); if (j && j.emp) atual = j; } catch (e) { /* novo */ }
+  Object.keys(tabelas).sort().forEach((e) => {
+    atual.emp[e] = tabelas[e];
+    const c = tabelas[e].cobertura;
+    console.log(`  Grupos da empresa ${e} gravados em dados/grupos.json: ${tabelas[e].linhas.toLocaleString("pt-BR")} grupos (${tabelas[e].arquivo}` + (c != null ? `; tem ${Math.round(c * 100)}% dos grupos usados pelos produtos da ${e})` : ")"));
+  });
+  atual.at = new Date().toISOString();
+  fs.mkdirSync(path.dirname(arq), { recursive: true });
+  fs.writeFileSync(arq, JSON.stringify(atual));
+  return atual;
+}
+
 // Arquivo aberto no Excel não pode ser movido depois; melhor avisar antes de processar.
 function arquivoLivre(arq) {
   try { const fd = fs.openSync(arq, "r+"); fs.closeSync(fd); return true; } catch (e) { return !(e && e.code === "EBUSY"); }
@@ -180,8 +216,8 @@ function ultimaProcessada(pasta) {
   return { pasta: ult, arquivos: fs.readdirSync(path.join(proc, ult)) };
 }
 
-// Modo do PUBLICAR. Devolve { status, doc, ncm, motivo }:
-//   status "gravou" (medição nova), "ncm" (só a tabela de NCM) ou "vazio" (nada para processar).
+// Modo do PUBLICAR. Devolve { status, doc, ncm, grupos, motivo }:
+//   status "gravou" (medição nova), "tabelas" (só tabela de NCM e/ou de grupos) ou "vazio" (nada para processar).
 // Lança erro (nada é gravado) se as planilhas tiverem problema.
 async function processarPasta(pasta) {
   fs.mkdirSync(pasta, { recursive: true });
@@ -207,14 +243,18 @@ async function processarPasta(pasta) {
   if (!tabelas.length) {
     throw new Error("Nenhuma das planilhas da pasta foi reconhecida (" + falhas.join(", ") + "). Confira se são as exportações SB1, SBZ e Saldo Físico do Protheus, com a linha de títulos das colunas.");
   }
-  const ncmTabs = tabelas.filter((t) => t.kind === "NCM"), med = tabelas.filter((t) => t.kind !== "NCM");
+  const ncmTabs = tabelas.filter((t) => t.kind === "NCM"), grpTabs = tabelas.filter((t) => t.kind === "GRP");
+  const med = tabelas.filter((t) => t.kind !== "NCM" && t.kind !== "GRP");
   if (med.length) {
     const problemas = conferir(med);
     if (problemas.length) throw new Error(problemas.join("\n  "));
   }
+  const dg = grpTabs.length ? decidirGrupos(grpTabs, med) : null;
+  if (dg && dg.erros.length) throw new Error(dg.erros.join("\n  "));
   if (falhas.length) console.log(`  Aviso: ${falhas.join(", ")} não ${falhas.length > 1 ? "foram reconhecidos e ficaram" : "foi reconhecido e ficou"} na pasta.`);
-  let ncm = null, doc = null;
+  let ncm = null, doc = null, grupos = null;
   if (ncmTabs.length) ncm = gravarTabelaNcm(ncmTabs);
+  if (dg) { gravarTabelaGrupos(dg.tabelas); grupos = Object.keys(dg.tabelas).sort(); }
   if (med.length) doc = await gravarMedicao(med);
   const destino = path.join(path.resolve(pasta), "processadas", carimbo());
   fs.mkdirSync(destino, { recursive: true });
@@ -230,10 +270,10 @@ async function processarPasta(pasta) {
   // subpasta que ficou vazia sai também
   Array.from(subpastas).sort((a, b) => b.length - a.length).forEach((d) => { try { if (!fs.readdirSync(d).length) fs.rmdirSync(d); } catch (e) { /* fica */ } });
   console.log(`  Planilhas guardadas em ${rel(destino)}/`);
-  return { status: med.length ? "gravou" : "ncm", doc, ncm };
+  return { status: med.length ? "gravou" : "tabelas", doc, ncm, grupos };
 }
 
-module.exports = { processarPasta, listarArquivos, lerPlanilhas, conferir, gravarMedicao, gravarTabelaNcm, dataBR };
+module.exports = { processarPasta, listarArquivos, lerPlanilhas, conferir, gravarMedicao, gravarTabelaNcm, gravarTabelaGrupos, dataBR };
 
 if (require.main === module) {
   (async () => {
@@ -245,9 +285,15 @@ if (require.main === module) {
     const arquivos = listarArquivos(args);
     if (!arquivos.length) { console.log("Nenhuma planilha .xlsx ou .csv encontrada. Nada a fazer."); return; }
     const lidas = (await lerPlanilhas(arquivos)).tabelas;
-    const ncmTabs = lidas.filter((t) => t.kind === "NCM"), tabelas = lidas.filter((t) => t.kind !== "NCM");
+    const ncmTabs = lidas.filter((t) => t.kind === "NCM"), grpTabs = lidas.filter((t) => t.kind === "GRP");
+    const tabelas = lidas.filter((t) => t.kind !== "NCM" && t.kind !== "GRP");
     if (ncmTabs.length) gravarTabelaNcm(ncmTabs);
-    if (!tabelas.length && ncmTabs.length) return;
+    if (grpTabs.length) {
+      const dg = decidirGrupos(grpTabs, tabelas);
+      if (dg.erros.length) { dg.erros.forEach((e) => console.log("Erro: " + e)); process.exit(1); }
+      gravarTabelaGrupos(dg.tabelas);
+    }
+    if (!tabelas.length && (ncmTabs.length || grpTabs.length)) return;
     const tipos = new Set(tabelas.map((t) => t.kind));
     if (!tipos.has("SB1") && !tipos.has("SB2")) { console.log("Preciso ao menos da SB1 (ou do Saldo Físico). Nada foi gravado."); process.exit(1); }
     conferir(tabelas).forEach((p) => console.log("Aviso: " + p));

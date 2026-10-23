@@ -55,7 +55,7 @@
   var ST = {
     snaps: [], viewId: null, cur: null, saved: null, preview: null, loadingId: null,
     scope: store("scope") || "all", tab: store("tab") || "saldo",
-    bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null, mk: store("mk") || "", ncm: "", ncmTab: null
+    bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null, mk: store("mk") || "", ncm: "", ncmTab: null, grupos: {}
   };
   var PAGE = 50;
 
@@ -89,6 +89,7 @@
     $("btnUpload").hidden = false;
     MarkStore.start();
     NcmStore.start();
+    GruposStore.start();
     await recarregar();
   }
   async function recarregar() {
@@ -739,7 +740,7 @@
     note: "marque na lista os produtos que você bloqueou no Protheus. Fica salvo neste navegador na hora; envie ao GitHub para todos verem.",
     why: function (e) { return e && e.message ? " (" + e.message + ")" : ""; },
     extra: function () {
-      var p = Marcas.pendentes(), pn = TabelaNcm.pendente();
+      var p = Marcas.pendentes(), pn = TabelaNcm.pendente() || TabelaGrupos.pendente();
       if (!p && !pn) return [];
       return [h("button", { cls: "btn small", type: "button", title: "Baixar os arquivos para enviar ao repositório",
         text: "Enviar ao GitHub" + (p ? " (" + n(p) + ")" : ""), onclick: function () { openPublish(); } })];
@@ -838,6 +839,17 @@
     if (ST.cur && mounted) { renderNcmNote(); renderTable(); renderProg(); }
   }
 
+  // tabelas de grupos: dados/grupos.json no repositório (ou as carregadas neste navegador e ainda não enviadas)
+  var GruposStore = {
+    start: function () { TabelaGrupos.carregar().then(function (t) { aplicarGrupos(t && t.emp); }); },
+    salvar: async function (emp, tab) {
+      var ok = TabelaGrupos.guardar(emp, tab);
+      aplicarGrupos(Object.assign({}, ST.grupos, (function () { var o = {}; o[emp] = tab; return o; })()));
+      if (!ok) throw new Error("o navegador não deixou guardar; envie o grupos.json ao GitHub antes de fechar a página");
+    },
+    onde: "neste navegador (envie ao GitHub para todos verem)"
+  };
+
   // tabela de NCM: dados/ncm.json no repositório (ou a carregada neste navegador e ainda não enviada)
   var NcmStore = {
     start: function () { TabelaNcm.carregar().then(aplicarTabelaNcm); },
@@ -901,12 +913,32 @@
     box.appendChild(t);
   }
 
+  // ---------- grupos de produto (descrição por empresa) ----------
+  function grupoCod(i) { return DupAnalysis.normGrupo(ST.cur.D.P[i][4]); }
+  function grupoDesc(emp, g) { var t = ST.grupos && ST.grupos[emp]; return (g && t && t.m && t.m[g]) || ""; }
+  function temGrupos() { return !!(ST.grupos && Object.keys(ST.grupos).length); }
+  function grupoTexto(i, comCodigo) {
+    var p = ST.cur.D.P[i], g = grupoCod(i), d = grupoDesc(p[0], g);
+    return g ? (comCodigo === false ? d : g + (d ? " – " + d : "")) : "";
+  }
+  function grupoTitulo(i) {
+    var p = ST.cur.D.P[i], g = grupoCod(i); if (!g) return "";
+    var cat = g.length > 2 ? grupoDesc(p[0], g.slice(0, 2)) : "", d = grupoDesc(p[0], g);
+    if (!d) return "Grupo " + g + (temGrupos() ? " — sem descrição na tabela de grupos da empresa " + p[0] : "");
+    return (cat ? "Categoria " + g.slice(0, 2) + " " + cat + " › " : "") + "Grupo " + g + " " + d + " (empresa " + p[0] + ")";
+  }
+  function aplicarGrupos(mapa) {
+    ST.grupos = mapa || {};
+    if (ST.cur && mounted) { renderTable(); renderProg(); }
+  }
+
   function prodCell(i, compact) {
     var cur = ST.cur, p = cur.D.P[i];
     var kids = [h("span", { cls: "p-cod", text: p[1] }), h("span", { cls: "p-desc", text: p[2] })];
     if (!compact) {
-      var meta = [p[3] ? "Tipo " + p[3] : "", p[5], p[4] ? "Grupo " + p[4] : "", "Emp. " + p[0]].filter(Boolean).join(" · ");
-      kids.push(h("span", { cls: "p-meta", text: meta }));
+      var gt = grupoTexto(i);
+      var meta = [p[3] ? "Tipo " + p[3] : "", p[5], gt ? "Grupo " + gt : "", "Emp. " + p[0]].filter(Boolean).join(" · ");
+      kids.push(h("span", { cls: "p-meta", text: meta, title: grupoTitulo(i) }));
       if (temNcm()) {
         var nc = p[9] || "", dsc = ncmDesc(nc);
         kids.push(h("span", { cls: "p-meta p-ncm" }, nc
@@ -1045,6 +1077,14 @@
         r.splice(16, 0, bp >= 0 ? ncmOf(bp) : "", bp >= 0 ? ncmDesc(ncmOf(bp)) : "", rel === "igual" ? "Sim" : rel === "dif" ? "Não" : "Sem NCM");
       });
     }
+    // grupo com o zero da frente (0102) e, se houver tabela de grupos, a descrição dele e o grupo do similar
+    var gi = headers.indexOf("Grupo"), si = headers.indexOf("Descrição similar") + 1, tg = temGrupos();
+    if (tg) { headers.splice(si, 0, "Grupo do similar"); headers.splice(gi + 1, 0, "Descrição do grupo"); }
+    rows.forEach(function (r, k) {
+      var i = list[k], bp = I.bestP[i];
+      r[gi] = grupoCod(i);
+      if (tg) { r.splice(si, 0, bp >= 0 ? grupoTexto(bp) : ""); r.splice(gi + 1, 0, grupoTexto(i, false)); }
+    });
     return { headers: headers, rows: rows };
   }
   async function exportXlsx() {
@@ -1150,7 +1190,7 @@
     var drop = h("label", { cls: "drop", for: "fileInput" }, [
       h("strong", { text: "Solte as planilhas aqui ou clique para escolher" }),
       h("span", { cls: "muted", text: "SB1 (cadastro), SBZ (indicadores) e Saldo Físico de cada empresa · .xlsx ou .csv" }),
-      h("span", { cls: "muted", style: "font-size:12px", text: "Opcional: tabela de NCM do Protheus (mata010), para mostrar a descrição de cada NCM" })]);
+      h("span", { cls: "muted", style: "font-size:12px", text: "Opcional: tabela de NCM (mata010) e tabela de grupos de cada empresa, com 02 ou 10 no nome do arquivo (ex.: \u201cmata010 02.xlsx\u201d), para mostrar as descrições" })]);
     var list = h("div", { cls: "flist", id: "flist" });
     var warns = h("ul", { cls: "warnlist", id: "upWarn" });
     var steps = h("div", { cls: "steps", id: "upSteps" });
@@ -1215,11 +1255,31 @@
       drawFileList();
     }
     var ncmTabs = tables.filter(function (t) { return t.kind === "NCM"; });
-    tables = tables.filter(function (t) { return t.kind !== "NCM"; });
+    var grpTabs = tables.filter(function (t) { return t.kind === "GRP"; });
+    tables = tables.filter(function (t) { return t.kind !== "NCM" && t.kind !== "GRP"; });
     var kinds = {}; tables.forEach(function (t) { kinds[t.kind] = 1; });
     var w = $("upWarn"); w.textContent = "";
     var warn = function (t) { w.appendChild(h("li", { text: t })); };
-    var ncmMsg = "";
+    var ncmMsg = "", grpMsg = "";
+    if (grpTabs.length) {
+      // empresa pelo nome do arquivo, conferida com os grupos dos produtos (SB1 carregada junto ou medição aberta)
+      var usados = kinds.SB1 ? DupAnalysis.gruposDaSB1(tables) : (ST.cur ? DupAnalysis.gruposDaMedicao(ST.cur.D) : {});
+      var dg = DupAnalysis.decidirGrupos(grpTabs, usados);
+      drawFileList();
+      if (dg.erros.length) {
+        dg.erros.forEach(warn);
+        warn("Nada foi gravado. Corrija e carregue de novo.");
+        UP.running = false; drawFileList(); setStep("", 0);
+        return;
+      }
+      dg.avisos.forEach(warn);
+      setStep("Guardando as tabelas de grupos…", 0.5);
+      try {
+        var emps = Object.keys(dg.tabelas).sort();
+        for (var gk = 0; gk < emps.length; gk++) await GruposStore.salvar(emps[gk], dg.tabelas[emps[gk]]);
+        grpMsg = "Grupos atualizados " + GruposStore.onde + ": " + emps.map(function (e) { return "empresa " + e + " (" + n(dg.tabelas[e].linhas) + " grupos)"; }).join(", ") + ".";
+      } catch (e) { warn("Não consegui guardar a tabela de grupos: " + ((e && (e.message || e.code)) || e) + "."); }
+    }
     if (ncmTabs.length) {
       setStep("Guardando a tabela de NCM…", 0.5);
       try {
@@ -1227,12 +1287,12 @@
         await NcmStore.salvar(tab);
         ncmMsg = "Tabela de NCM atualizada " + NcmStore.onde + ": " + n(tab.linhas) + " códigos com descrição.";
       } catch (e) { warn("Não consegui guardar a tabela de NCM: " + ((e && (e.message || e.code)) || e) + "."); }
-      if (!tables.length) {
-        UP.running = false; drawFileList();
-        if (ncmMsg) { w.appendChild(h("li", { cls: "ok", text: ncmMsg })); setStep("Pronto. Pode fechar esta janela.", 1); }
-        else setStep("", 0);
-        return;
-      }
+    }
+    if (!tables.length && (ncmTabs.length || grpTabs.length)) {
+      UP.running = false; drawFileList();
+      [grpMsg, ncmMsg].forEach(function (m) { if (m) w.appendChild(h("li", { cls: "ok", text: m })); });
+      if (grpMsg || ncmMsg) setStep("Pronto. Pode fechar esta janela.", 1); else setStep("", 0);
+      return;
     }
     if (!kinds.SB1 && !kinds.SB2) { warn("Preciso ao menos da SB1 (ou do Saldo Físico) para comparar as descrições."); UP.running = false; drawFileList(); setStep("", 0); return; }
     if (!kinds.SB1) warn("Sem SB1: vou usar a descrição do Saldo Físico, e só os produtos que aparecem nele.");
@@ -1245,7 +1305,7 @@
       closeDrawer();
       setCurrent({ id: null, doc: null, D: D }, true);
       $("previewText").textContent = "Ainda não foi salva no histórico. Confira os números e salve para registrar o ponto na evolução.";
-      if (ncmMsg) toast(ncmMsg);
+      if (ncmMsg || grpMsg) toast([grpMsg, ncmMsg].filter(Boolean).join(" "));
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) {
       UP.running = false; drawFileList();
@@ -1292,6 +1352,10 @@
     if (pendNcm) lista.appendChild(linhaArquivo("ncm.json", "dados/", function () {
       Armazem.baixar("ncm.json", JSON.stringify(TabelaNcm.pendente()), "application/json");
     }));
+    var pendGrp = TabelaGrupos.pendente();
+    if (pendGrp) lista.appendChild(linhaArquivo("grupos.json", "dados/", async function () {
+      Armazem.baixar("grupos.json", JSON.stringify(await TabelaGrupos.paraPublicar()), "application/json");
+    }));
     var pendMk = Marcas.pendentes();
     if (pendMk) lista.appendChild(linhaArquivo("bloqueios.json", "dados/", function () {
       Armazem.baixar("bloqueios.json", JSON.stringify(Marcas.paraPublicar()), "application/json");
@@ -1307,7 +1371,7 @@
     var steps = h("ol", { cls: "steps", style: "padding-left:18px;margin:0" }, [
       h("li", { text: "Baixe os arquivos acima." }),
       h("li", { text: "Jeito mais fácil: dê dois cliques no PUBLICAR.bat. Ele pega os arquivos na pasta Downloads, coloca cada um no lugar e publica." }),
-      h("li", { text: "Ou, no site do GitHub: abra a pasta dados do repositório → Add file → Upload files → solte o historico.json" + (pendMk ? " e o bloqueios.json" : "") + (pendNcm ? " e o ncm.json" : "") + " → Commit changes." }),
+      h("li", { text: "Ou, no site do GitHub: abra a pasta dados do repositório → Add file → Upload files → solte o historico.json" + (pendMk ? " e o bloqueios.json" : "") + (pendNcm ? " e o ncm.json" : "") + (pendGrp ? " e o grupos.json" : "") + " → Commit changes." }),
       h("li", { text: "Abra a pasta dados/medicoes → Add file → Upload files → solte o(s) arquivo(s) s….json → Commit changes." }),
       h("li", { text: "Em 1 a 2 minutos o site publicado mostra tudo para todo mundo. Até lá as novidades aparecem só neste navegador." })]);
     var panel = h("div", { cls: "drawer", role: "dialog", "aria-modal": "true", "aria-label": "Enviar ao GitHub" }, [
@@ -1316,7 +1380,8 @@
       aviso ? h("ul", { cls: "warnlist" }, [h("li", { text: aviso })]) : null,
       h("p", { cls: "note", style: "font-size:13px", text: (locais.length ? "A medição foi salva neste navegador. Para ela entrar no histórico do site, envie estes arquivos ao repositório." : "Não há medições pendentes neste navegador; o historico.json abaixo é o mesmo que já está no repositório.") +
         (pendMk ? " O bloqueios.json leva as " + (pendMk === 1 ? "1 marcação feita" : n(pendMk) + " marcações feitas") + " neste navegador." : "") +
-        (pendNcm ? " O ncm.json leva a tabela de NCM carregada neste navegador." : "") }),
+        (pendNcm ? " O ncm.json leva a tabela de NCM carregada neste navegador." : "") +
+        (pendGrp ? " O grupos.json leva as tabelas de grupos carregadas neste navegador." : "") }),
       lista, steps,
       h("div", { cls: "actions" }, [h("button", { cls: "btn", type: "button", text: "Fechar", onclick: close })])]);
     var bg = h("div", { cls: "drawer-bg", onclick: function (ev) { if (ev.target === bg) close(); } }, [panel]);

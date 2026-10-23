@@ -28,13 +28,22 @@ var DupAnalysis = (function () {
     // tabela de NCM do Protheus (rotina mata010 / tabela SYD): código + descrição
     NCM: { label: "Tabela de NCM", need: ["cod", "desc"], cols: {
       cod: ["tec", "yd_tec", "ncm", "cod. ncm", "codigo ncm", "nbm"], desc: ["descricao", "yd_desc_p", "desc. ncm", "descricao ncm"],
-      ex: ["ex-ncm", "yd_ex_ncm"] } }
+      ex: ["ex-ncm", "yd_ex_ncm"] } },
+    // tabela de grupos de produto do Protheus (SBM: Codigo, Descricao, Marca) — uma por empresa;
+    // a empresa vem do nome do arquivo ("mata010 02.xlsx") e é conferida com os grupos dos produtos
+    GRP: { label: "Tabela de grupos", need: ["cod", "desc"], cols: {
+      cod: ["bm_grupo", "cod. grupo", "codigo", "grupo"], desc: ["bm_desc", "descricao", "desc. grupo", "descricao grupo"] } }
   };
 
   function classify(alias, headers) {
     var h = headers.map(normLabel);
     var has = function (arr) { return arr.some(function (x) { return h.indexOf(x) >= 0; }); };
     if (alias && SPECS[alias]) return alias;
+    if (alias === "SBM") return "GRP";
+    // tabela de grupos: código + descrição e nada de produto, saldo, ponto de pedido ou NCM
+    var grpCod = has(["bm_grupo", "cod. grupo"]) || (has(["codigo"]) && !has(["grupo", "b1_grupo"])) || (has(["grupo"]) && !has(["codigo", "b1_cod", "produto"]));
+    var prodCols = ["tipo", "b1_tipo", "unidade", "b1_um", "filial", "b1_filial", "ult. compra", "b1_ucom", "ativo", "b1_ativo"].concat(SPECS.SB1.cols.ncm);
+    if (grpCod && has(SPECS.GRP.cols.desc) && !has(prodCols) && !has(SPECS.SB2.cols.saldo) && !has(SPECS.SBZ.cols.pp) && !has(SPECS.NCM.cols.cod)) return "GRP";
     if (has(SPECS.SB1.cols.desc) && has(SPECS.SB1.cols.cod) && !has(SPECS.SB2.cols.saldo)) return "SB1";
     if (has(SPECS.SB2.cols.saldo)) return "SB2";
     if (has(SPECS.SBZ.cols.pp)) return "SBZ";
@@ -110,11 +119,11 @@ var DupAnalysis = (function () {
             if (/^S[A-Z0-9]{2}$/.test(a)) alias = a;
             return;
           }
-          if (filled >= 3) {
+          if (filled >= 3 || (filled === 2 && nonEmpty <= 10)) {
             headers = [];
             for (var j = 0; j < cells.length; j++) headers[j] = cells[j] == null ? "" : String(cells[j]);
             kind = classify(alias, headers);
-            if (!kind) return;
+            if (!kind) { if (nonEmpty < 10) headers = null; return; }
             var spec = SPECS[kind], h = headers.map(normLabel);
             map = {};
             Object.keys(spec.cols).forEach(function (f) {
@@ -158,6 +167,95 @@ var DupAnalysis = (function () {
       }
     });
     return { v: 1, at: new Date().toISOString(), arquivo: nomes.join(", "), linhas: linhas, m: m };
+  }
+
+  // ---- grupos de produto (descrição por empresa) ----
+  // Código do grupo como no Protheus: 2 dígitos (categoria) ou 4 (grupo); o Excel tira o zero da frente.
+  function normGrupo(v) {
+    var s = cleanCode(v);
+    if (/^\d+$/.test(s) && s.length % 2 === 1) s = "0" + s;
+    return s;
+  }
+  function grupoTabela(t) {
+    var m = {}, linhas = 0, d = t.data;
+    for (var i = 0; i < d.cod.length; i++) {
+      var c = normGrupo(d.cod[i]), ds = String(d.desc[i] == null ? "" : d.desc[i]).trim().replace(/\s+/g, " ");
+      if (!c || !ds) continue;
+      if (!m[c]) linhas++;
+      m[c] = ds;
+    }
+    return { v: 1, at: new Date().toISOString(), arquivo: t.name, linhas: linhas, m: m };
+  }
+  // Empresa escrita no nome do arquivo: um número de 2 dígitos solto ("mata010 02.xlsx" → 02).
+  function empresaDoNome(nome, conhecidas) {
+    var base = String(nome || "").replace(/\.[^.]+$/, ""), re = /(?:^|\D)(\d{2})(?!\d)/g, achou = [], m;
+    while ((m = re.exec(base))) { if (achou.indexOf(m[1]) < 0) achou.push(m[1]); re.lastIndex = m.index + 1; }
+    if (conhecidas && conhecidas.length) achou = achou.filter(function (e) { return conhecidas.indexOf(e) >= 0; });
+    return achou.length === 1 ? achou[0] : null;
+  }
+  // Grupos usados pelos produtos de cada empresa: {emp: {grupo: 1}}
+  function gruposDaSB1(tables) {
+    var u = {};
+    tables.forEach(function (t) {
+      if (t.kind !== "SB1" || !t.data.grupo) return;
+      var f = t.data.filial || [];
+      for (var i = 0; i < t.data.grupo.length; i++) {
+        var e = empOf(cleanFilial(f[i])), g = normGrupo(t.data.grupo[i]);
+        if (!g || e === "*") continue;
+        (u[e] = u[e] || {})[g] = 1;
+      }
+    });
+    return u;
+  }
+  function gruposDaMedicao(D) {
+    var u = {};
+    [D && D.P, D && D.I].forEach(function (L) {
+      (L || []).forEach(function (p) { var g = normGrupo(p[4]); if (g) (u[p[0]] = u[p[0]] || {})[g] = 1; });
+    });
+    return u;
+  }
+  // Decide a empresa de cada tabela de grupos: nome do arquivo + conferência com os grupos dos produtos.
+  // Uma tabela da empresa certa tem quase todos os grupos usados por ela (02: 100%; com a tabela trocada, 53%).
+  // Devolve { tabelas: {emp: tab}, erros: [texto], avisos: [texto] }.
+  function decidirGrupos(grpTables, usados) {
+    usados = usados || {};
+    var conhecidas = Object.keys(usados).filter(function (e) { return Object.keys(usados[e]).length >= 5; }).sort();
+    var out = { tabelas: {}, erros: [], avisos: [] }, origem = {};
+    var pct = function (x) { return Math.round(x * 100) + "%"; };
+    grpTables.forEach(function (t) {
+      var tab = grupoTabela(t), cov = {}, best = null, second = null;
+      conhecidas.forEach(function (e) {
+        var gs = Object.keys(usados[e]), ok = 0;
+        gs.forEach(function (g) { if (tab.m[g]) ok++; });
+        cov[e] = ok / gs.length;
+        if (best === null || cov[e] > cov[best]) { second = best; best = e; }
+        else if (second === null || cov[e] > cov[second]) second = e;
+      });
+      var claro = best !== null && cov[best] >= 0.9 && (second === null || cov[best] - cov[second] >= 0.1);
+      var nomeEmp = empresaDoNome(t.name, conhecidas.length ? conhecidas : null), emp = null;
+      if (nomeEmp) {
+        if (claro && best !== nomeEmp && (cov[nomeEmp] || 0) < 0.9) {
+          out.erros.push(t.name + ": o nome diz empresa " + nomeEmp + ", mas os grupos batem com a empresa " + best + " (" + pct(cov[best]) +
+            " dos grupos dos produtos da " + best + " estão nela, contra " + pct(cov[nomeEmp] || 0) + " da " + nomeEmp + "). Confira se o arquivo não foi trocado.");
+          return;
+        }
+        emp = nomeEmp;
+        if (cov[emp] != null && cov[emp] < 0.9) out.avisos.push(t.name + ": só " + pct(cov[emp]) + " dos grupos dos produtos da empresa " + emp + " estão nesta tabela.");
+      } else if (claro) {
+        emp = best;
+        out.avisos.push(t.name + ": sem a empresa no nome; pelos grupos dos produtos é da empresa " + emp + " (" + pct(cov[emp]) + ").");
+      } else {
+        out.erros.push(t.name + ": não sei de qual empresa é esta tabela de grupos. Coloque a empresa no nome do arquivo, por exemplo \"grupos 02.xlsx\".");
+        return;
+      }
+      if (origem[emp]) { out.erros.push("Há duas tabelas de grupos da empresa " + emp + ": " + origem[emp] + " e " + t.name + ". Deixe só uma."); delete out.tabelas[emp]; return; }
+      origem[emp] = t.name;
+      tab.emp = emp; tab.cobertura = cov[emp] != null ? Math.round(cov[emp] * 1000) / 1000 : null;
+      out.tabelas[emp] = tab;
+      t.label = "Tabela de grupos · empresa " + emp;
+    });
+    if (out.erros.length) out.tabelas = {};
+    return out;
   }
 
   // tables: array of readTable results. runJoin(strings, T, onProgress) -> Promise<{a,b,s,n}>
@@ -422,6 +520,8 @@ var DupAnalysis = (function () {
   }
 
   return { readTable: readTable, build: build, summarize: summarize, snapshotDoc: snapshotDoc, ncmTabela: ncmTabela,
+    normGrupo: normGrupo, grupoTabela: grupoTabela, empresaDoNome: empresaDoNome, gruposDaSB1: gruposDaSB1,
+    gruposDaMedicao: gruposDaMedicao, decidirGrupos: decidirGrupos,
     BANDS: BANDS, bandOf: bandOf, SPECS: SPECS, T_MIN: T_MIN };
 })();
 if (typeof module !== "undefined") module.exports = DupAnalysis;
