@@ -74,7 +74,22 @@ function importarDownloads(dl) {
     if (mudou) { gravarJson(arq, { v: 1, at: new Date().toISOString(), m: m }); console.log(`  + dados/bloqueios.json (${mudou} marcação(ões) atualizada(s))`); n++; }
     else if (lidos) console.log("  bloqueios.json baixado já estava no repositório.");
   }
-  if (!n && !hs.length && !bs.length) console.log("  Nenhum arquivo baixado pelo site.");
+  // tabela de NCM: fica a mais nova (campo "at")
+  const ns = nomes.filter((f) => /^ncm( \(\d+\))?\.json$/i.test(f));
+  if (ns.length) {
+    const arq = path.join(dados, "ncm.json");
+    let atual = null; try { atual = lerJson(arq); } catch (e) { atual = null; }
+    let melhor = null;
+    ns.forEach((f) => {
+      const src = path.join(dl, f);
+      let j; try { j = lerJson(src); } catch (e) { console.log(`  Aviso: ${f} está incompleto; ficou na pasta Downloads.`); return; }
+      if (j && j.m && (!melhor || j.at > melhor.at)) melhor = j;
+      fs.unlinkSync(src);
+    });
+    if (melhor && (!atual || !atual.at || melhor.at > atual.at)) { gravarJson(arq, melhor); console.log(`  + dados/ncm.json (${melhor.linhas} códigos)`); n++; }
+    else if (melhor) console.log("  ncm.json baixado já estava no repositório.");
+  }
+  if (!n && !hs.length && !bs.length && !ns.length) console.log("  Nenhum arquivo baixado pelo site.");
   return n;
 }
 
@@ -88,6 +103,7 @@ function importarDownloads(dl) {
   const { processarPasta } = require("./processar.js");
   const r = await processarPasta(pasta);
   if (r === "vazio") console.log("  Nenhuma planilha nova na pasta.");
+  if (r === "ncm") console.log("  Só a tabela de NCM foi atualizada (nenhuma medição nova).");
 })().catch((e) => {
   console.log("\n  [ERRO] Nada foi publicado:\n  " + (e && e.message ? e.message : e));
   console.log("  As planilhas continuam na pasta. Corrija e rode o PUBLICAR de novo.");

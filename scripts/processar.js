@@ -56,7 +56,10 @@ async function lerPlanilhas(arquivos) {
     const blob = new Blob([fs.readFileSync(arq)]);
     try {
       const t = await DupAnalysis.readTable(blob, nome);
-      if (t.kind) { t.arquivo = arq; t.empresas = empresasDa(t); tabelas.push(t); console.log(`  ✓ ${nome}: ${t.label} · ${t.rows.toLocaleString("pt-BR")} linhas · empresa ${Object.keys(t.empresas).sort().join(", ") || "?"}`); }
+      if (t.kind) {
+        t.arquivo = arq; t.empresas = t.kind === "NCM" ? {} : empresasDa(t); tabelas.push(t);
+        console.log(`  ✓ ${nome}: ${t.label} · ${t.rows.toLocaleString("pt-BR")} linhas` + (t.kind === "NCM" ? "" : ` · empresa ${Object.keys(t.empresas).sort().join(", ") || "?"}`));
+      }
       else { falhas.push(nome); console.log(`  ✗ ${nome}: ${t.error}`); }
     } catch (e) { falhas.push(nome); console.log(`  ✗ ${nome}: não consegui ler (${e.message})`); }
   }
@@ -112,6 +115,15 @@ async function gravarMedicao(tabelas) {
   return doc;
 }
 
+// Tabela de NCM (mata010) → dados/ncm.json, usada para mostrar a descrição de cada NCM.
+function gravarTabelaNcm(ncmTabs) {
+  const tab = DupAnalysis.ncmTabela(ncmTabs);
+  fs.mkdirSync(path.join(raiz, "dados"), { recursive: true });
+  fs.writeFileSync(path.join(raiz, "dados", "ncm.json"), JSON.stringify(tab));
+  console.log(`  Tabela de NCM gravada em dados/ncm.json: ${tab.linhas.toLocaleString("pt-BR")} códigos com descrição.`);
+  return tab;
+}
+
 // Arquivo aberto no Excel não pode ser movido depois; melhor avisar antes de processar.
 function arquivoLivre(arq) {
   try { const fd = fs.openSync(arq, "r+"); fs.closeSync(fd); return true; } catch (e) { return !(e && e.code === "EBUSY"); }
@@ -129,9 +141,13 @@ async function processarPasta(pasta) {
   if (presos.length) throw new Error("Feche no Excel: " + presos.map((a) => path.basename(a)).join(", ") + ". Depois rode o PUBLICAR de novo.");
   const { tabelas, falhas } = await lerPlanilhas(arquivos);
   if (!tabelas.length) { console.log("  Nenhuma planilha do Protheus reconhecida na pasta (" + falhas.join(", ") + " ficou de fora)."); return "vazio"; }
-  const problemas = conferir(tabelas);
-  if (problemas.length) throw new Error(problemas.join("\n  "));
-  await gravarMedicao(tabelas);
+  const ncmTabs = tabelas.filter((t) => t.kind === "NCM"), med = tabelas.filter((t) => t.kind !== "NCM");
+  if (med.length) {
+    const problemas = conferir(med);
+    if (problemas.length) throw new Error(problemas.join("\n  "));
+  }
+  if (ncmTabs.length) gravarTabelaNcm(ncmTabs);
+  if (med.length) await gravarMedicao(med);
   const destino = path.join(path.resolve(pasta), "processadas", carimbo());
   fs.mkdirSync(destino, { recursive: true });
   tabelas.forEach((t) => {
@@ -140,10 +156,10 @@ async function processarPasta(pasta) {
     catch (e) { fs.copyFileSync(t.arquivo, alvo); try { fs.unlinkSync(t.arquivo); } catch (e2) { console.log(`  Aviso: não consegui tirar ${path.basename(t.arquivo)} da pasta; apague-o antes da próxima atualização.`); } }
   });
   console.log(`  Planilhas guardadas em ${path.relative(raiz, destino).replace(/\\/g, "/")}/`);
-  return "gravou";
+  return med.length ? "gravou" : "ncm";
 }
 
-module.exports = { processarPasta, listarArquivos, lerPlanilhas, conferir, gravarMedicao };
+module.exports = { processarPasta, listarArquivos, lerPlanilhas, conferir, gravarMedicao, gravarTabelaNcm };
 
 if (require.main === module) {
   (async () => {
@@ -154,7 +170,10 @@ if (require.main === module) {
     }
     const arquivos = listarArquivos(args);
     if (!arquivos.length) { console.log("Nenhuma planilha .xlsx ou .csv encontrada. Nada a fazer."); return; }
-    const { tabelas } = await lerPlanilhas(arquivos);
+    const lidas = (await lerPlanilhas(arquivos)).tabelas;
+    const ncmTabs = lidas.filter((t) => t.kind === "NCM"), tabelas = lidas.filter((t) => t.kind !== "NCM");
+    if (ncmTabs.length) gravarTabelaNcm(ncmTabs);
+    if (!tabelas.length && ncmTabs.length) return;
     const tipos = new Set(tabelas.map((t) => t.kind));
     if (!tipos.has("SB1") && !tipos.has("SB2")) { console.log("Preciso ao menos da SB1 (ou do Saldo Físico). Nada foi gravado."); process.exit(1); }
     conferir(tabelas).forEach((p) => console.log("Aviso: " + p));

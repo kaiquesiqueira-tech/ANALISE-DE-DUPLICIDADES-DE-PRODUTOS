@@ -55,7 +55,7 @@
   var ST = {
     snaps: [], viewId: null, cur: null, saved: null, preview: null, loadingId: null,
     scope: store("scope") || "all", tab: store("tab") || "saldo",
-    bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null, mk: store("mk") || "", ncm: ""
+    bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null, mk: store("mk") || "", ncm: "", ncmTab: null
   };
   var PAGE = 50;
 
@@ -88,6 +88,7 @@
   async function boot() {
     $("btnUpload").hidden = false;
     MarkStore.start();
+    NcmStore.start();
     await recarregar();
   }
   async function recarregar() {
@@ -738,10 +739,10 @@
     note: "marque na lista os produtos que você bloqueou no Protheus. Fica salvo neste navegador na hora; envie ao GitHub para todos verem.",
     why: function (e) { return e && e.message ? " (" + e.message + ")" : ""; },
     extra: function () {
-      var p = Marcas.pendentes();
-      if (!p) return [];
-      return [h("button", { cls: "btn small", type: "button", title: "Baixar o bloqueios.json para enviar ao repositório",
-        text: "Enviar ao GitHub (" + n(p) + ")", onclick: function () { openPublish(); } })];
+      var p = Marcas.pendentes(), pn = TabelaNcm.pendente();
+      if (!p && !pn) return [];
+      return [h("button", { cls: "btn small", type: "button", title: "Baixar os arquivos para enviar ao repositório",
+        text: "Enviar ao GitHub" + (p ? " (" + n(p) + ")" : ""), onclick: function () { openPublish(); } })];
     }
   };
 
@@ -829,6 +830,25 @@
       ". Clique num produto para ver todos os similares" + (MK.on && !MK.readonly ? "; marque a caixa quando bloquear no Protheus." : ".");
   }
 
+  // ---------- tabela de NCM (descrições) ----------
+  function ncmDesc(c) { return (c && ST.ncmTab && ST.ncmTab.m && ST.ncmTab.m[c]) || ""; }
+  function temTabelaNcm() { return !!(ST.ncmTab && ST.ncmTab.linhas); }
+  function aplicarTabelaNcm(t) {
+    ST.ncmTab = t && t.m ? t : null;
+    if (ST.cur && mounted) { renderNcmNote(); renderTable(); renderProg(); }
+  }
+
+  // tabela de NCM: dados/ncm.json no repositório (ou a carregada neste navegador e ainda não enviada)
+  var NcmStore = {
+    start: function () { TabelaNcm.carregar().then(aplicarTabelaNcm); },
+    salvar: async function (tab) {
+      var ok = TabelaNcm.guardar(tab);
+      aplicarTabelaNcm(tab);
+      if (!ok) throw new Error("o navegador não deixou guardar; envie o ncm.json ao GitHub antes de fechar a página");
+    },
+    onde: "neste navegador (envie ao GitHub para todos verem)"
+  };
+
   // ---------- NCM (campo Pos.IPI/NCM da SB1) ----------
   function temNcm() { return !!(ST.cur && ST.cur.D.totals && ST.cur.D.totals.hasNcm); }
   function ncmOf(i) { return ST.cur.D.P[i][9] || ""; }
@@ -840,7 +860,11 @@
     if (!temNcm() || j < 0) return null;
     var r = ncmRel(i, j), b = ncmOf(j);
     if (r === "igual") return h("div", { cls: "tags" }, [h("span", { cls: "tag ncm-eq", text: "NCM igual" })]);
-    if (r === "dif") return h("div", { cls: "tags" }, [h("span", { cls: "tag ncm-dif", title: "NCM do produto: " + ncmOf(i) + " · NCM do similar: " + b, text: curto ? "NCM diferente do produto" : "NCM diferente: " + b })]);
+    if (r === "dif") {
+      var da = ncmDesc(ncmOf(i)), db = ncmDesc(b);
+      return h("div", { cls: "tags" }, [h("span", { cls: "tag ncm-dif", title: "NCM do produto: " + ncmOf(i) + (da ? " (" + da + ")" : "") + " · NCM do similar: " + b + (db ? " (" + db + ")" : ""),
+        text: curto ? "NCM diferente do produto" : "NCM diferente: " + b + (db ? " · " + db : "") })]);
+    }
     if (!b) return h("div", { cls: "tags" }, [h("span", { cls: "tag ncm-dif", text: "Similar sem NCM" })]);
     return null;
   }
@@ -865,7 +889,7 @@
       if (!ncmOf(i)) sem++;
       else if (ncmRel(i, I.bestP[i]) === "dif") dif++;
     }
-    box.hidden = !(dif || sem);
+    box.hidden = !(dif || sem || !temTabelaNcm());
     var lnk = function (txt, v) { return h("button", { cls: "lnk", type: "button", text: txt, onclick: function () { goNcm(v); } }); };
     var t = h("span");
     t.appendChild(document.createTextNode("NCM: "));
@@ -873,6 +897,7 @@
     if (dif && sem) t.appendChild(document.createTextNode(" · "));
     if (sem) t.appendChild(lnk(n(sem) + (sem === 1 ? " produto sem NCM" : " produtos sem NCM"), "sem"));
     t.appendChild(document.createTextNode("."));
+    if (!temTabelaNcm()) t.appendChild(document.createTextNode(" Para ver a descrição de cada NCM, carregue também a tabela de NCM do Protheus (mata010) ao atualizar a base."));
     box.appendChild(t);
   }
 
@@ -881,13 +906,13 @@
     var kids = [h("span", { cls: "p-cod", text: p[1] }), h("span", { cls: "p-desc", text: p[2] })];
     if (!compact) {
       var meta = [p[3] ? "Tipo " + p[3] : "", p[5], p[4] ? "Grupo " + p[4] : "", "Emp. " + p[0]].filter(Boolean).join(" · ");
-      var mk2 = [meta];
+      kids.push(h("span", { cls: "p-meta", text: meta }));
       if (temNcm()) {
-        var nc = p[9] || "";
-        mk2.push(" · ");
-        mk2.push(nc ? h("span", { cls: ncmOk(nc) ? "ncm" : "ncm bad", title: "Pos.IPI/NCM (SB1)", text: "NCM " + nc + (ncmOk(nc) ? "" : " (incompleto)") }) : h("span", { cls: "ncm bad", text: "sem NCM" }));
+        var nc = p[9] || "", dsc = ncmDesc(nc);
+        kids.push(h("span", { cls: "p-meta p-ncm" }, nc
+          ? [h("span", { cls: ncmOk(nc) ? "ncm" : "ncm bad", title: "Pos.IPI/NCM (SB1)", text: "NCM " + nc + (ncmOk(nc) ? "" : " (incompleto)") }), dsc ? h("span", { cls: "ncm-d", text: " · " + dsc }) : null]
+          : [h("span", { cls: "ncm bad", text: "sem NCM" })]));
       }
-      kids.push(h("span", { cls: "p-meta" }, mk2));
     }
     return h("div", null, kids);
   }
@@ -1013,10 +1038,11 @@
         bp >= 0 ? P[bp][1] : "", bp >= 0 ? P[bp][2] : "", bp >= 0 ? sitText(bp) : "", nSim(i), acao, ondeTem(P[i][8])].concat(MK.on ? [mkOf(i) ? "Sim" : "Não", mkOf(i) ? dt(mkWhen(mkOf(i)), true) : ""] : []));
     });
     if (temNcm()) {
-      headers.splice(6, 0, "NCM"); headers.splice(15, 0, "NCM similar", "NCM igual ao do similar");
+      headers.splice(6, 0, "NCM", "Descrição do NCM"); headers.splice(16, 0, "NCM similar", "Descrição do NCM similar", "NCM igual ao do similar");
       rows.forEach(function (r, k) {
         var i = list[k], bp = I.bestP[i], rel = bp >= 0 ? ncmRel(i, bp) : "sem";
-        r.splice(6, 0, ncmOf(i)); r.splice(15, 0, bp >= 0 ? ncmOf(bp) : "", rel === "igual" ? "Sim" : rel === "dif" ? "Não" : "Sem NCM");
+        r.splice(6, 0, ncmOf(i), ncmDesc(ncmOf(i)));
+        r.splice(16, 0, bp >= 0 ? ncmOf(bp) : "", bp >= 0 ? ncmDesc(ncmOf(bp)) : "", rel === "igual" ? "Sim" : rel === "dif" ? "Não" : "Sem NCM");
       });
     }
     return { headers: headers, rows: rows };
@@ -1123,7 +1149,8 @@
     var input = h("input", { type: "file", id: "fileInput", multiple: true, accept: ".xlsx,.csv,.txt", style: "display:none" });
     var drop = h("label", { cls: "drop", for: "fileInput" }, [
       h("strong", { text: "Solte as planilhas aqui ou clique para escolher" }),
-      h("span", { cls: "muted", text: "SB1 (cadastro), SBZ (indicadores) e Saldo Físico de cada empresa · .xlsx ou .csv" })]);
+      h("span", { cls: "muted", text: "SB1 (cadastro), SBZ (indicadores) e Saldo Físico de cada empresa · .xlsx ou .csv" }),
+      h("span", { cls: "muted", style: "font-size:12px", text: "Opcional: tabela de NCM do Protheus (mata010), para mostrar a descrição de cada NCM" })]);
     var list = h("div", { cls: "flist", id: "flist" });
     var warns = h("ul", { cls: "warnlist", id: "upWarn" });
     var steps = h("div", { cls: "steps", id: "upSteps" });
@@ -1187,9 +1214,26 @@
       }
       drawFileList();
     }
+    var ncmTabs = tables.filter(function (t) { return t.kind === "NCM"; });
+    tables = tables.filter(function (t) { return t.kind !== "NCM"; });
     var kinds = {}; tables.forEach(function (t) { kinds[t.kind] = 1; });
     var w = $("upWarn"); w.textContent = "";
     var warn = function (t) { w.appendChild(h("li", { text: t })); };
+    var ncmMsg = "";
+    if (ncmTabs.length) {
+      setStep("Guardando a tabela de NCM…", 0.5);
+      try {
+        var tab = DupAnalysis.ncmTabela(ncmTabs);
+        await NcmStore.salvar(tab);
+        ncmMsg = "Tabela de NCM atualizada " + NcmStore.onde + ": " + n(tab.linhas) + " códigos com descrição.";
+      } catch (e) { warn("Não consegui guardar a tabela de NCM: " + ((e && (e.message || e.code)) || e) + "."); }
+      if (!tables.length) {
+        UP.running = false; drawFileList();
+        if (ncmMsg) { w.appendChild(h("li", { cls: "ok", text: ncmMsg })); setStep("Pronto. Pode fechar esta janela.", 1); }
+        else setStep("", 0);
+        return;
+      }
+    }
     if (!kinds.SB1 && !kinds.SB2) { warn("Preciso ao menos da SB1 (ou do Saldo Físico) para comparar as descrições."); UP.running = false; drawFileList(); setStep("", 0); return; }
     if (!kinds.SB1) warn("Sem SB1: vou usar a descrição do Saldo Físico, e só os produtos que aparecem nele.");
     if (!kinds.SBZ) warn("Sem SBZ: o ponto de pedido não será considerado.");
@@ -1201,6 +1245,7 @@
       closeDrawer();
       setCurrent({ id: null, doc: null, D: D }, true);
       $("previewText").textContent = "Ainda não foi salva no histórico. Confira os números e salve para registrar o ponto na evolução.";
+      if (ncmMsg) toast(ncmMsg);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (e) {
       UP.running = false; drawFileList();
@@ -1243,6 +1288,10 @@
     lista.appendChild(linhaArquivo("historico.json", "dados/", function () {
       Armazem.baixar("historico.json", JSON.stringify(historico, null, 1), "application/json");
     }));
+    var pendNcm = TabelaNcm.pendente();
+    if (pendNcm) lista.appendChild(linhaArquivo("ncm.json", "dados/", function () {
+      Armazem.baixar("ncm.json", JSON.stringify(TabelaNcm.pendente()), "application/json");
+    }));
     var pendMk = Marcas.pendentes();
     if (pendMk) lista.appendChild(linhaArquivo("bloqueios.json", "dados/", function () {
       Armazem.baixar("bloqueios.json", JSON.stringify(Marcas.paraPublicar()), "application/json");
@@ -1258,7 +1307,7 @@
     var steps = h("ol", { cls: "steps", style: "padding-left:18px;margin:0" }, [
       h("li", { text: "Baixe os arquivos acima." }),
       h("li", { text: "Jeito mais fácil: dê dois cliques no PUBLICAR.bat. Ele pega os arquivos na pasta Downloads, coloca cada um no lugar e publica." }),
-      h("li", { text: "Ou, no site do GitHub: abra a pasta dados do repositório → Add file → Upload files → solte o historico.json" + (pendMk ? " e o bloqueios.json" : "") + " → Commit changes." }),
+      h("li", { text: "Ou, no site do GitHub: abra a pasta dados do repositório → Add file → Upload files → solte o historico.json" + (pendMk ? " e o bloqueios.json" : "") + (pendNcm ? " e o ncm.json" : "") + " → Commit changes." }),
       h("li", { text: "Abra a pasta dados/medicoes → Add file → Upload files → solte o(s) arquivo(s) s….json → Commit changes." }),
       h("li", { text: "Em 1 a 2 minutos o site publicado mostra tudo para todo mundo. Até lá as novidades aparecem só neste navegador." })]);
     var panel = h("div", { cls: "drawer", role: "dialog", "aria-modal": "true", "aria-label": "Enviar ao GitHub" }, [
@@ -1266,7 +1315,8 @@
       h("h2", { text: "Enviar ao GitHub" }),
       aviso ? h("ul", { cls: "warnlist" }, [h("li", { text: aviso })]) : null,
       h("p", { cls: "note", style: "font-size:13px", text: (locais.length ? "A medição foi salva neste navegador. Para ela entrar no histórico do site, envie estes arquivos ao repositório." : "Não há medições pendentes neste navegador; o historico.json abaixo é o mesmo que já está no repositório.") +
-        (pendMk ? " O bloqueios.json leva as " + (pendMk === 1 ? "1 marcação feita" : n(pendMk) + " marcações feitas") + " neste navegador." : "") }),
+        (pendMk ? " O bloqueios.json leva as " + (pendMk === 1 ? "1 marcação feita" : n(pendMk) + " marcações feitas") + " neste navegador." : "") +
+        (pendNcm ? " O ncm.json leva a tabela de NCM carregada neste navegador." : "") }),
       lista, steps,
       h("div", { cls: "actions" }, [h("button", { cls: "btn", type: "button", text: "Fechar", onclick: close })])]);
     var bg = h("div", { cls: "drawer-bg", onclick: function (ev) { if (ev.target === bg) close(); } }, [panel]);

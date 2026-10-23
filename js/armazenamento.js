@@ -147,3 +147,19 @@ var Marcas = (function () {
   function paraPublicar() { return { v: 1, at: new Date().toISOString(), m: juntar() }; }
   return { iniciar: iniciar, salvar: salvar, pendentes: pendentes, paraPublicar: paraPublicar };
 })();
+
+// ===== Tabela de NCM (descrição de cada código) =====
+// No repositório: dados/ncm.json. Carregada pelo site e ainda não enviada: localStorage.
+var TabelaNcm = (function () {
+  var CHAVE = "dup:ncm:v1";
+  function local() { try { return JSON.parse(localStorage.getItem(CHAVE) || "null"); } catch (e) { return null; } }
+  async function carregar() {
+    var repo = null, loc = local();
+    try { var r = await fetch("dados/ncm.json", { cache: "no-store" }); if (r.ok) repo = await r.json(); } catch (e) { repo = null; }
+    if (loc && repo && repo.at >= loc.at) { try { localStorage.removeItem(CHAVE); } catch (e) { /* nada */ } loc = null; }
+    return loc || repo;
+  }
+  function guardar(t) { try { localStorage.setItem(CHAVE, JSON.stringify(t)); return true; } catch (e) { return false; } }
+  function pendente() { return local(); }
+  return { carregar: carregar, guardar: guardar, pendente: pendente };
+})();

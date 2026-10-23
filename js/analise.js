@@ -24,7 +24,11 @@ var DupAnalysis = (function () {
     SB2: { label: "SB2 · Saldo físico", need: ["cod", "saldo"], cols: {
       filial: ["filial", "b2_filial"], cod: ["produto", "b2_cod", "codigo"], saldo: ["saldo atual", "b2_qatu"],
       prev: ["qtd.prevista", "qtd. prevista", "b2_salpedi"], empenho: ["empenho", "b2_qemp"],
-      desc: ["nome cientif", "descricao", "desc. produto"] } }
+      desc: ["nome cientif", "descricao", "desc. produto"] } },
+    // tabela de NCM do Protheus (rotina mata010 / tabela SYD): código + descrição
+    NCM: { label: "Tabela de NCM", need: ["cod", "desc"], cols: {
+      cod: ["tec", "yd_tec", "ncm", "cod. ncm", "codigo ncm", "nbm"], desc: ["descricao", "yd_desc_p", "desc. ncm", "descricao ncm"],
+      ex: ["ex-ncm", "yd_ex_ncm"] } }
   };
 
   function classify(alias, headers) {
@@ -34,6 +38,7 @@ var DupAnalysis = (function () {
     if (has(SPECS.SB1.cols.desc) && has(SPECS.SB1.cols.cod) && !has(SPECS.SB2.cols.saldo)) return "SB1";
     if (has(SPECS.SB2.cols.saldo)) return "SB2";
     if (has(SPECS.SBZ.cols.pp)) return "SBZ";
+    if (has(SPECS.NCM.cols.cod) && has(SPECS.NCM.cols.desc)) return "NCM";
     return null;
   }
 
@@ -132,9 +137,27 @@ var DupAnalysis = (function () {
       }
     };
     await XlsxStream.read(blob, name, visitor, onProgress);
-    if (!kind) return { kind: null, name: name, rows: 0, error: "Não reconheci esta planilha (esperava SB1, SBZ ou SB2/Saldo físico)." };
+    if (!kind) return { kind: null, name: name, rows: 0, error: "Não reconheci esta planilha (esperava SB1, SBZ, SB2/Saldo físico ou a tabela de NCM)." };
     return { kind: kind, label: SPECS[kind].label, name: name, rows: rows, data: data,
       hasBlq: kind === "SB1" && map.blq >= 0, hasAtivo: kind === "SB1" && map.ativo >= 0, hasNcm: kind === "SB1" && map.ncm >= 0 };
+  }
+
+  // Tabela de NCM (mata010): código 0000.00.00 → descrição. A linha sem Ex-NCM tem preferência.
+  function ncmTabela(tables) {
+    var m = {}, linhas = 0, nomes = [];
+    tables.forEach(function (t) {
+      nomes.push(t.name);
+      var d = t.data;
+      for (var i = 0; i < d.cod.length; i++) {
+        var c = cleanNcm(d.cod[i]), ds = String(d.desc[i] == null ? "" : d.desc[i]).trim().replace(/\s+/g, " ");
+        if (!c || !ds) continue;
+        var ex = d.ex ? cleanCode(d.ex[i]) : "";
+        if (m[c] && ex) continue;
+        if (!m[c]) linhas++;
+        m[c] = ds;
+      }
+    });
+    return { v: 1, at: new Date().toISOString(), arquivo: nomes.join(", "), linhas: linhas, m: m };
   }
 
   // tables: array of readTable results. runJoin(strings, T, onProgress) -> Promise<{a,b,s,n}>
@@ -398,7 +421,7 @@ var DupAnalysis = (function () {
     return o;
   }
 
-  return { readTable: readTable, build: build, summarize: summarize, snapshotDoc: snapshotDoc,
+  return { readTable: readTable, build: build, summarize: summarize, snapshotDoc: snapshotDoc, ncmTabela: ncmTabela,
     BANDS: BANDS, bandOf: bandOf, SPECS: SPECS, T_MIN: T_MIN };
 })();
 if (typeof module !== "undefined") module.exports = DupAnalysis;
