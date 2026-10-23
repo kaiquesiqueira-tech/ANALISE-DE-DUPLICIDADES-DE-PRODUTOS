@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Usado pelo PUBLICAR.bat antes de enviar ao GitHub:
-//   1) traz da pasta Downloads o que o site baixou (historico.json, bloqueios.json, s….json),
+//   1) traz da pasta Downloads o que o site baixou (historico.json, bloqueios.json, ncm.json, s….json),
 //      juntando com o que já está em dados/ (nada do repositório se perde);
-//   2) processa as planilhas da pasta planilhas/ e grava a nova medição em dados/.
+//   2) devolve ao historico.json as medições de dados/medicoes que tinham sumido dele;
+//   3) processa as planilhas da pasta planilhas/ e grava a nova medição em dados/.
 //
-// Uso: node scripts/publicar.js --downloads "C:\Users\...\Downloads" --planilhas planilhas
-// Sai com código 1 se algo impedir a publicação (nada é gravado nesse caso).
+// Uso: node scripts/publicar.js --downloads "C:\Users\...\Downloads" --planilhas planilhas [--log arq] [--resumo arq]
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -14,6 +14,27 @@ const raiz = path.resolve(__dirname, "..");
 const dados = path.join(raiz, "dados");
 
 function arg(nome) { const i = process.argv.indexOf(nome); return i > 0 ? process.argv[i + 1] : null; }
+
+// Tudo o que aparece na janela também vai para o PUBLICAR-log.txt (para mandar no chat se algo der errado).
+const arqLog = arg("--log");
+if (arqLog) {
+  const orig = console.log.bind(console);
+  console.log = (...a) => {
+    orig(...a);
+    try { fs.appendFileSync(arqLog, a.map((x) => (typeof x === "string" ? x : String(x))).join(" ") + "\r\n"); } catch (e) { /* log é só ajuda */ }
+  };
+  console.warn = console.log;
+}
+// Resumo de uma linha que o PUBLICAR.bat mostra na faixa final.
+// Só ASCII (sem acento) e sem & | < > ^ % " ( ), que o cmd do Windows entenderia como comandos.
+function resumo(txt) {
+  const a = arg("--resumo");
+  if (!a) return;
+  const t = String(txt).normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u2013\u2014]/g, "-").replace(/\u2192/g, "->").replace(/[\u201c\u201d]/g, "'")
+    .replace(/[&|<>^%"()]/g, " ").replace(/[^\x20-\x7e]/g, "").replace(/\s+/g, " ").replace(/ ([.,])/g, "$1").trim().slice(0, 400);
+  try { fs.writeFileSync(a, t + "\r\n"); } catch (e) { /* idem */ }
+}
 function lerJson(arq) { return JSON.parse(fs.readFileSync(arq, "utf8").replace(/^\uFEFF/, "")); }
 function gravarJson(arq, obj, recuo) { fs.mkdirSync(path.dirname(arq), { recursive: true }); fs.writeFileSync(arq, JSON.stringify(obj, null, recuo)); }
 function listaHist(j) { return (Array.isArray(j) ? j : (j && j.medicoes) || []).filter((m) => m && m.id && m.at); }
@@ -93,19 +114,65 @@ function importarDownloads(dl) {
   return n;
 }
 
+// Medição que está em dados/medicoes mas sumiu do historico.json (acontece quando a pasta dados
+// é substituída por uma cópia antiga, por exemplo ao copiar o zip do app por cima) volta para o histórico.
+// Só as do mesmo mínimo de similaridade atual; as antigas de 70% ficam de fora de propósito.
+function repararHistorico() {
+  const pastaMed = path.join(dados, "medicoes"), arq = path.join(dados, "historico.json");
+  if (!fs.existsSync(pastaMed)) return 0;
+  let lista = []; try { lista = listaHist(lerJson(arq)); } catch (e) { lista = []; }
+  const ids = new Set(lista.map((m) => m.id));
+  const orfas = fs.readdirSync(pastaMed).filter((f) => /^s\d{14}\.json$/.test(f) && !ids.has(f.slice(0, -5)));
+  if (!orfas.length) return 0;
+  global.SimCore = global.SimCore || require(path.join(raiz, "js/simcore.js"));
+  global.XlsxStream = global.XlsxStream || require(path.join(raiz, "js/xlsxstream.js"));
+  const DupAnalysis = require(path.join(raiz, "js/analise.js"));
+  const { dataBR } = require("./processar.js");
+  const voltaram = [];
+  orfas.forEach((f) => {
+    let D; try { D = lerJson(path.join(pastaMed, f)); } catch (e) { return; }
+    if (!D || !D.at || !Array.isArray(D.P) || (D.T || 0) !== DupAnalysis.T_MIN) return;
+    try {
+      const id = f.slice(0, -5), { summary } = DupAnalysis.summarize(D);
+      lista.push(Object.assign({ id, at: D.at, arquivo: f }, DupAnalysis.snapshotDoc(D, summary)));
+      voltaram.push(dataBR(D.at));
+    } catch (e) { console.log(`  Aviso: não consegui ler dados/medicoes/${f} (${e.message}).`); }
+  });
+  if (!voltaram.length) return 0;
+  lista.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  gravarJson(arq, lista, 1);
+  console.log(`  + dados/historico.json: ${voltaram.length} medição(ões) tinham sumido do histórico e voltaram (${voltaram.join("; ")}).`);
+  return voltaram.length;
+}
+
+// Código de saída lido pelo PUBLICAR.bat:
+//   0 = medição nova gravada · 10 = nenhuma planilha nova · 11 = só a tabela de NCM
+//   12 = planilhas com problema (o resto é publicado) · 1 = erro inesperado (nada é publicado)
 (async () => {
   console.log("\n  Arquivos baixados pelo site (pasta Downloads):");
   importarDownloads(arg("--downloads"));
+  repararHistorico();
 
   const pasta = path.resolve(raiz, arg("--planilhas") || "planilhas");
   fs.mkdirSync(pasta, { recursive: true });
   console.log("\n  Planilhas do Protheus (pasta " + path.relative(raiz, pasta).replace(/\\/g, "/") + "):");
-  const { processarPasta } = require("./processar.js");
-  const r = await processarPasta(pasta);
-  if (r === "vazio") console.log("  Nenhuma planilha nova na pasta.");
-  if (r === "ncm") console.log("  Só a tabela de NCM foi atualizada (nenhuma medição nova).");
+  const { processarPasta, dataBR } = require("./processar.js");
+  let r;
+  try { r = await processarPasta(pasta); }
+  catch (e) {
+    const msg = e && e.message ? e.message : String(e);
+    console.log("\n  [PROBLEMA NAS PLANILHAS] A base NÃO foi atualizada:\n  " + msg);
+    console.log("  As planilhas continuam na pasta planilhas. Corrija e rode o PUBLICAR de novo.");
+    const linhas = msg.split("\n").map((x) => x.trim()).filter(Boolean);
+    resumo(linhas[0] + (linhas.length > 1 ? ` E mais ${linhas.length - 1} problema${linhas.length > 2 ? "s" : ""} - veja acima.` : ""));
+    process.exitCode = 12;
+    return;
+  }
+  if (r.status === "gravou") { resumo("Medição de " + dataBR(r.doc.at) + (r.ncm ? " + tabela de NCM" : "")); process.exitCode = 0; }
+  else if (r.status === "ncm") { console.log("  Só a tabela de NCM foi atualizada (nenhuma medição nova)."); resumo("Tabela de NCM com " + r.ncm.linhas.toLocaleString("pt-BR") + " códigos"); process.exitCode = 11; }
+  else { resumo(r.motivo || "Nenhuma planilha nova na pasta planilhas."); process.exitCode = 10; }
 })().catch((e) => {
   console.log("\n  [ERRO] Nada foi publicado:\n  " + (e && e.message ? e.message : e));
-  console.log("  As planilhas continuam na pasta. Corrija e rode o PUBLICAR de novo.");
-  process.exit(1);
+  console.log("  Corrija e rode o PUBLICAR de novo.");
+  process.exitCode = 1;
 });

@@ -3,6 +3,12 @@ setlocal EnableExtensions
 chcp 65001 >nul
 title PUBLICAR - Duplicidade de Cadastro
 cd /d "%~dp0"
+set "LOG=%CD%\PUBLICAR-log.txt"
+set "RESARQ=%TEMP%\duplicidade-resumo.txt"
+set "GITOUT=%TEMP%\duplicidade-git.txt"
+set "RES="
+if exist "%RESARQ%" del "%RESARQ%" >nul 2>nul
+> "%LOG%" echo PUBLICAR - %date% %time% - pasta %CD%
 
 echo.
 echo  ==========================================================
@@ -38,17 +44,22 @@ if errorlevel 1 goto :semremoto
 
 rem ---- 1. Trazer o que ja esta no GitHub, para a medicao nova entrar no historico mais recente ----
 echo  [1/5] Buscando o que ja esta no GitHub...
+>> "%LOG%" echo [1/5] git pull
 git ls-remote --exit-code --heads origin %BR% >nul 2>nul
 if errorlevel 1 goto :passo2
-git pull --rebase --autostash -q origin %BR%
-if errorlevel 1 goto :conflito
+git pull --rebase --autostash -q origin %BR% > "%GITOUT%" 2>&1
+set "GE=%errorlevel%"
+type "%GITOUT%"
+type "%GITOUT%" >> "%LOG%"
+if not "%GE%"=="0" goto :falhapull
 
 :passo2
 rem ---- 2. Node.js, que calcula a medicao no computador ----
 echo.
 echo  [2/5] Preparando o processamento...
 set "TEMPLAN="
-for %%f in ("planilhas\*.xlsx" "planilhas\*.csv" "planilhas\*.txt") do set "TEMPLAN=1"
+for /f "delims=" %%f in ('dir /s /b /a-d "planilhas\*.xlsx" "planilhas\*.xlsm" "planilhas\*.csv" "planilhas\*.txt" 2^>nul ^| findstr /v /i /l /c:"processadas"') do set "TEMPLAN=1"
+for %%f in ("*.xlsx" "*.xlsm" "*.csv") do set "TEMPLAN=1"
 call :acharnode
 if defined NODE goto :passo3
 if defined TEMPLAN goto :semnode
@@ -62,45 +73,76 @@ echo.
 echo  [3/5] Processando as planilhas e os arquivos baixados pelo site...
 set "DL="
 for /f "usebackq delims=" %%d in (`powershell -NoProfile -Command "$d=$null; try { $d=(New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path } catch { }; if(-not $d -or -not (Test-Path -LiteralPath $d)){ $d=Join-Path $env:USERPROFILE 'Downloads' }; Write-Output $d"`) do set "DL=%%d"
-"%NODE%" scripts\publicar.js --downloads "%DL%" --planilhas planilhas
-if errorlevel 1 goto :falhaproc
+"%NODE%" scripts\publicar.js --downloads "%DL%" --planilhas planilhas --log "%LOG%" --resumo "%RESARQ%"
+set "RES=%errorlevel%"
+if "%RES%"=="0" goto :passo4
+if "%RES%"=="10" goto :passo4
+if "%RES%"=="11" goto :passo4
+if "%RES%"=="12" goto :passo4
+goto :falhaproc
 
 :passo4
 rem ---- 4. Registrar alteracoes ----
 echo.
 echo  [4/5] Registrando as alteracoes...
-git add -A
+>> "%LOG%" echo [4/5] git add / commit
+git add -A >> "%LOG%" 2>&1
 git diff --cached --quiet
 if errorlevel 1 goto :commit
 echo        Nenhuma alteracao nova para publicar.
+>> "%LOG%" echo Nenhuma alteracao nova para publicar.
 goto :passo5
 
 :commit
 git status --short
-git commit -q -m "Atualizacao do painel %date% %time:~0,5%"
+git status --short >> "%LOG%" 2>&1
+git commit -q -m "Atualizacao do painel %date% %time:~0,5%" >> "%LOG%" 2>&1
 if errorlevel 1 goto :falhacommit
 
 :passo5
 rem ---- 5. Enviar ----
 echo.
 echo  [5/5] Enviando para o GitHub...
+>> "%LOG%" echo [5/5] git pull / push
 git ls-remote --exit-code --heads origin %BR% >nul 2>nul
 if errorlevel 1 goto :push
-git pull --rebase --autostash -q origin %BR%
-if errorlevel 1 goto :conflito
+git pull --rebase --autostash -q origin %BR% > "%GITOUT%" 2>&1
+set "GE=%errorlevel%"
+type "%GITOUT%"
+type "%GITOUT%" >> "%LOG%"
+if not "%GE%"=="0" goto :falhapull
 :push
-git push -u origin %BR%
-if errorlevel 1 goto :falhapush
+git push -u origin %BR% > "%GITOUT%" 2>&1
+set "GE=%errorlevel%"
+type "%GITOUT%"
+type "%GITOUT%" >> "%LOG%"
+if not "%GE%"=="0" goto :falhapush
 
+rem ---- Resultado: a faixa diz se a base de produtos foi atualizada ou nao ----
+if not defined RES set "RES=10"
+set "RESUMO="
+if exist "%RESARQ%" set /p RESUMO=<"%RESARQ%"
 echo.
 echo  ==========================================================
-echo    PUBLICADO COM SUCESSO
+if "%RES%"=="0" echo    BASE ATUALIZADA E PUBLICADA
+if "%RES%"=="11" echo    TABELA DE NCM PUBLICADA - a base de produtos nao mudou
+if "%RES%"=="10" echo    ATENCAO: A BASE NAO FOI ATUALIZADA - nenhuma planilha nova
+if "%RES%"=="12" echo    ATENCAO: A BASE NAO FOI ATUALIZADA - problema nas planilhas
 echo  ==========================================================
+if defined RESUMO echo    %RESUMO%
+if "%RES%"=="10" echo    Coloque SB1, SBZ e Saldo Fisico na pasta planilhas desta pasta e rode de novo.
+if "%RES%"=="12" echo    O motivo completo esta acima e no arquivo PUBLICAR-log.txt.
+if "%RES%"=="10" echo    O resto - marcacoes, tabela de NCM, historico - foi enviado.
+if "%RES%"=="12" echo    O resto - marcacoes, tabela de NCM, historico - foi enviado.
+>> "%LOG%" echo RESULTADO %RES%: %RESUMO%
+echo.
+echo    Registro completo: PUBLICAR-log.txt nesta pasta - mande no chat se algo der errado.
 set "SITE="
 for /f "usebackq delims=" %%s in (`powershell -NoProfile -Command "$u=(git remote get-url origin); if($u -match 'github\.com[:/]+([^/]+)/(.+?)(\.git)?/?$'){ $o=$matches[1].ToLower(); $r=$matches[2]; if($r -ieq ($o+'.github.io')){ 'https://'+$o+'.github.io/' } else { 'https://'+$o+'.github.io/'+$r+'/' } }"`) do set "SITE=%%s"
 if not defined SITE goto :fim
 echo    Site: %SITE%
 echo    O GitHub Pages leva de 1 a 2 minutos para mostrar a versao nova.
+echo    No app instalado: feche e abra de novo. No navegador: Ctrl+F5.
 echo.
 choice /c SN /n /m "   Abrir o site agora? [S/N] "
 if errorlevel 2 goto :fim
@@ -131,6 +173,7 @@ exit /b 0
 
 rem ================= mensagens =================
 :semgit
+>> "%LOG%" echo [ERRO] Git nao instalado.
 echo  [ERRO] O Git nao esta instalado neste computador.
 echo         Baixe em https://git-scm.com/download/win , instale e rode de novo.
 goto :fim
@@ -150,19 +193,33 @@ echo.
 echo  [ERRO] Nao consegui preparar o Node.js para processar as planilhas.
 echo         Instale o Node.js LTS - https://nodejs.org - e rode o PUBLICAR de novo.
 echo         As planilhas continuam na pasta planilhas. Nada foi enviado.
+>> "%LOG%" echo [ERRO] Node.js nao disponivel e nao consegui baixar. Nada foi enviado.
 goto :fim
 
 :falhaproc
 echo.
-echo  Nada foi enviado ao GitHub.
+echo  [ERRO] O processamento parou - codigo %RES%. Nada foi enviado ao GitHub.
+echo         Mande o arquivo PUBLICAR-log.txt desta pasta no chat.
+>> "%LOG%" echo [ERRO] processamento parou com codigo %RES%. Nada foi enviado.
 goto :fim
 
 :falhacommit
-echo  [ERRO] Nao consegui registrar as alteracoes.
+echo  [ERRO] Nao consegui registrar as alteracoes - detalhes em PUBLICAR-log.txt.
+>> "%LOG%" echo [ERRO] git commit falhou.
+goto :fim
+
+:falhapull
+if exist ".git\rebase-merge" goto :conflito
+if exist ".git\rebase-apply" goto :conflito
+echo.
+echo  [ERRO] Nao consegui buscar o que esta no GitHub. Verifique a internet e se voce
+echo         esta logado no GitHub. Nada foi enviado. Rode o PUBLICAR de novo.
+>> "%LOG%" echo [ERRO] git pull falhou.
 goto :fim
 
 :conflito
 git rebase --abort >nul 2>nul
+>> "%LOG%" echo [ERRO] conflito com o GitHub.
 echo.
 echo  [ERRO] O GitHub tem alteracoes que conflitam com as suas - geralmente o
 echo         dados\historico.json mudou nos dois lados. Nada foi enviado.
@@ -173,6 +230,8 @@ goto :fim
 echo.
 echo  [ERRO] O envio falhou. Verifique a internet e se voce esta logado no GitHub -
 echo         na primeira vez abre uma janela de login. Depois rode o PUBLICAR de novo.
+echo         A medicao ja ficou registrada no computador e vai junto no proximo envio.
+>> "%LOG%" echo [ERRO] git push falhou.
 goto :fim
 
 :identidade

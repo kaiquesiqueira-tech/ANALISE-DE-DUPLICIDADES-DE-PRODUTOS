@@ -7,7 +7,8 @@
 //
 // O PUBLICAR.bat usa a função processarPasta (modo conferido): só grava a medição se tiver
 // SB1, SBZ e Saldo Físico de todas as empresas, e depois guarda as planilhas em
-// planilhas/processadas/<data>/ para não processar de novo.
+// planilhas/processadas/<data>/ para não processar de novo. Procura também nas subpastas de
+// planilhas/ e recolhe planilhas deixadas na pasta principal do app.
 //
 // Requer Node.js 20.12 ou mais novo. Usa o mesmo motor do site (js/), então o resultado é idêntico.
 "use strict";
@@ -19,20 +20,35 @@ global.SimCore = require(path.join(raiz, "js/simcore.js"));
 global.XlsxStream = require(path.join(raiz, "js/xlsxstream.js"));
 const DupAnalysis = require(path.join(raiz, "js/analise.js"));
 
-const EXT = /\.(xlsx|csv|txt)$/i;
+const EXT = /\.(xlsx|xlsm|csv|txt)$/i;
+// Planilhas que o app não lê: o PUBLICAR avisa em vez de ignorar calado.
+const OUTRAS = [
+  [/\.xls$/i, "formato antigo do Excel (.xls)"],
+  [/\.xlsb$/i, "pasta de trabalho binária do Excel (.xlsb)"],
+  [/\.xml$/i, "planilha em XML"],
+  [/\.ods$/i, "planilha do LibreOffice (.ods)"],
+  [/\.zip$/i, "arquivo compactado (.zip) — extraia as planilhas"],
+];
 const KIND_NOME = { SB1: "SB1 (cadastro de produtos)", SBZ: "SBZ (ponto de pedido)", SB2: "Saldo Físico (SB2)" };
 
-function listarArquivos(args) {
+// Pasta: entra nas subpastas (menos "processadas", que guarda o que já foi usado).
+function varrer(pasta, out, fora) {
+  fs.readdirSync(pasta).sort().forEach((f) => {
+    const full = path.join(pasta, f);
+    let st; try { st = fs.statSync(full); } catch (e) { return; }
+    if (st.isDirectory()) { if (!/^processadas$/i.test(f) && !f.startsWith(".")) varrer(full, out, fora); return; }
+    if (!st.isFile() || f.startsWith("~$") || /^leia-me\.md$/i.test(f) || /^desktop\.ini$/i.test(f) || f.startsWith(".")) return;
+    if (EXT.test(f)) out.push(full);
+    else if (fora) fora.push(full);
+  });
+}
+function listarArquivos(args, fora) {
   const out = [];
   args.forEach((a) => {
     const p = path.resolve(a);
     if (!fs.existsSync(p)) { console.warn("Não encontrado:", a); return; }
-    if (fs.statSync(p).isDirectory()) {
-      fs.readdirSync(p).sort().forEach((f) => {
-        const full = path.join(p, f);
-        if (EXT.test(f) && !f.startsWith("~$") && fs.statSync(full).isFile()) out.push(full);
-      });
-    } else out.push(p);
+    if (fs.statSync(p).isDirectory()) varrer(p, out, fora);
+    else out.push(p);
   });
   return out;
 }
@@ -133,33 +149,91 @@ function carimbo() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
-// Modo do PUBLICAR. Devolve "gravou", "vazio" ou lança erro (nada é gravado).
+function rel(arq) { return path.relative(raiz, arq).replace(/\\/g, "/"); }
+function dataBR(iso) {
+  const d = new Date(iso), p = (x) => String(x).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// Planilha deixada na pasta principal do app vai para a pasta planilhas
+// (senão ela não é processada e ainda iria para o GitHub junto com o resto).
+function recolherDaRaiz(pasta) {
+  const movidos = [];
+  fs.readdirSync(raiz).forEach((f) => {
+    const full = path.join(raiz, f);
+    if (!/\.(xlsx|xlsm|xls|csv)$/i.test(f) || f.startsWith("~$")) return;
+    try { if (!fs.statSync(full).isFile()) return; } catch (e) { return; }
+    const alvo = path.join(pasta, f);
+    if (fs.existsSync(alvo)) { console.log(`  Aviso: ${f} está na pasta principal do app e também em planilhas/; usei o da pasta planilhas.`); return; }
+    try { fs.renameSync(full, alvo); movidos.push(f); }
+    catch (e) { console.log(`  Aviso: ${f} está na pasta principal do app; mova-o para a pasta planilhas (${e.code === "EBUSY" ? "está aberto no Excel" : e.message}).`); }
+  });
+  if (movidos.length) console.log("  Movi da pasta principal do app para planilhas/: " + movidos.join(", "));
+}
+
+function ultimaProcessada(pasta) {
+  const proc = path.join(pasta, "processadas");
+  if (!fs.existsSync(proc)) return null;
+  const subs = fs.readdirSync(proc).filter((f) => { try { return fs.statSync(path.join(proc, f)).isDirectory(); } catch (e) { return false; } }).sort();
+  if (!subs.length) return null;
+  const ult = subs[subs.length - 1];
+  return { pasta: ult, arquivos: fs.readdirSync(path.join(proc, ult)) };
+}
+
+// Modo do PUBLICAR. Devolve { status, doc, ncm, motivo }:
+//   status "gravou" (medição nova), "ncm" (só a tabela de NCM) ou "vazio" (nada para processar).
+// Lança erro (nada é gravado) se as planilhas tiverem problema.
 async function processarPasta(pasta) {
-  const arquivos = listarArquivos([pasta]);
-  if (!arquivos.length) return "vazio";
+  fs.mkdirSync(pasta, { recursive: true });
+  recolherDaRaiz(pasta);
+  const fora = [];
+  const arquivos = listarArquivos([pasta], fora);
+  fora.forEach((a) => {
+    const n = path.basename(a), o = OUTRAS.find((x) => x[0].test(n));
+    if (o) console.log(`  ✗ ${rel(a)}: ${o[1]} — abra no Excel e use Salvar como → "Pasta de Trabalho do Excel (.xlsx)".`);
+    else console.log(`  · ${rel(a)}: não é planilha; ignorado.`);
+  });
+  if (!arquivos.length) {
+    const ult = ultimaProcessada(pasta);
+    const motivo = fora.length ? "Nenhuma planilha .xlsx ou .csv na pasta planilhas (veja os arquivos ✗ acima)." : "A pasta planilhas está vazia.";
+    console.log("  " + motivo);
+    console.log(`  Pasta conferida: ${pasta}`);
+    if (ult) console.log(`  Última atualização processada: planilhas/processadas/${ult.pasta}/ (${ult.arquivos.join(", ")})`);
+    return { status: "vazio", motivo };
+  }
   const presos = arquivos.filter((a) => !arquivoLivre(a));
   if (presos.length) throw new Error("Feche no Excel: " + presos.map((a) => path.basename(a)).join(", ") + ". Depois rode o PUBLICAR de novo.");
   const { tabelas, falhas } = await lerPlanilhas(arquivos);
-  if (!tabelas.length) { console.log("  Nenhuma planilha do Protheus reconhecida na pasta (" + falhas.join(", ") + " ficou de fora)."); return "vazio"; }
+  if (!tabelas.length) {
+    throw new Error("Nenhuma das planilhas da pasta foi reconhecida (" + falhas.join(", ") + "). Confira se são as exportações SB1, SBZ e Saldo Físico do Protheus, com a linha de títulos das colunas.");
+  }
   const ncmTabs = tabelas.filter((t) => t.kind === "NCM"), med = tabelas.filter((t) => t.kind !== "NCM");
   if (med.length) {
     const problemas = conferir(med);
     if (problemas.length) throw new Error(problemas.join("\n  "));
   }
-  if (ncmTabs.length) gravarTabelaNcm(ncmTabs);
-  if (med.length) await gravarMedicao(med);
+  if (falhas.length) console.log(`  Aviso: ${falhas.join(", ")} não ${falhas.length > 1 ? "foram reconhecidos e ficaram" : "foi reconhecido e ficou"} na pasta.`);
+  let ncm = null, doc = null;
+  if (ncmTabs.length) ncm = gravarTabelaNcm(ncmTabs);
+  if (med.length) doc = await gravarMedicao(med);
   const destino = path.join(path.resolve(pasta), "processadas", carimbo());
   fs.mkdirSync(destino, { recursive: true });
+  const subpastas = new Set();
   tabelas.forEach((t) => {
-    const alvo = path.join(destino, path.basename(t.arquivo));
+    const dir = path.dirname(t.arquivo);
+    if (path.resolve(dir) !== path.resolve(pasta)) subpastas.add(dir);
+    let alvo = path.join(destino, path.basename(t.arquivo));
+    if (fs.existsSync(alvo)) alvo = path.join(destino, path.basename(dir) + " - " + path.basename(t.arquivo)); // mesmo nome em subpastas diferentes
     try { fs.renameSync(t.arquivo, alvo); }
     catch (e) { fs.copyFileSync(t.arquivo, alvo); try { fs.unlinkSync(t.arquivo); } catch (e2) { console.log(`  Aviso: não consegui tirar ${path.basename(t.arquivo)} da pasta; apague-o antes da próxima atualização.`); } }
   });
-  console.log(`  Planilhas guardadas em ${path.relative(raiz, destino).replace(/\\/g, "/")}/`);
-  return med.length ? "gravou" : "ncm";
+  // subpasta que ficou vazia sai também
+  Array.from(subpastas).sort((a, b) => b.length - a.length).forEach((d) => { try { if (!fs.readdirSync(d).length) fs.rmdirSync(d); } catch (e) { /* fica */ } });
+  console.log(`  Planilhas guardadas em ${rel(destino)}/`);
+  return { status: med.length ? "gravou" : "ncm", doc, ncm };
 }
 
-module.exports = { processarPasta, listarArquivos, lerPlanilhas, conferir, gravarMedicao, gravarTabelaNcm };
+module.exports = { processarPasta, listarArquivos, lerPlanilhas, conferir, gravarMedicao, gravarTabelaNcm, dataBR };
 
 if (require.main === module) {
   (async () => {
