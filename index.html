@@ -64,6 +64,7 @@
 <template id="tplMain">
   <section class="kpis" id="kpis" aria-label="Indicadores"></section>
   <div class="inat-note" id="inatNote" hidden></div>
+  <div class="inat-note ncm-note" id="ncmNote" hidden></div>
 
   <section class="panel" id="pProg" hidden>
     <div class="prog-head">
@@ -109,10 +110,11 @@
       <div class="tabs" role="tablist" id="tabs"></div>
     </div>
     <div class="tools" id="tools">
-      <label class="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input type="search" id="q" placeholder="Buscar código ou descrição" aria-label="Buscar código ou descrição"></label>
+      <label class="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input type="search" id="q" placeholder="Buscar código, descrição ou NCM" aria-label="Buscar código, descrição ou NCM"></label>
       <span id="bandToggles" class="tools"></span>
       <select id="fSit" aria-label="Situação"></select>
       <select id="fTipo" aria-label="Tipo de produto"></select>
+      <select id="fNcm" aria-label="NCM" hidden></select>
       <select id="fMk" aria-label="Marcação de bloqueio" hidden></select>
       <span class="spacer"></span>
       <span class="savestate" id="saveState" role="status" aria-live="polite" hidden></span>
@@ -158,6 +160,7 @@
       <p><strong>Não bloquear</strong>: o produto tem saldo atual diferente de zero (SB2), previsão de chegada (Qtd. prevista no SB2) ou ponto de pedido (SBZ). <strong>Pode bloquear</strong>: não tem nenhum dos três. Se o similar dele está em uso, bloqueie este e mantenha o similar; se o similar também está livre, escolha qual manter.</p>
       <p>Inativos: produto da SB1 com <strong>Ativo = N</strong> (ou Bloqueado = Sim, quando a coluna vier na exportação) é tratado como bloqueado e fica fora da análise. O aviso abaixo dos indicadores mostra quantos são e se algum ainda tem movimento.</p>
       <p>Marcação de bloqueio: a caixa “Bloqueei” de cada produto registra que ele foi bloqueado no Protheus. A marcação vale por empresa e código e continua nas próximas medições. Quando a SB1 nova chega com o produto inativo (Ativo = N), ele conta como <strong>confirmado na base</strong>; se ele foi marcado antes da medição e ainda está ativo, aparece como <strong>a conferir</strong>.</p>
+      <p>NCM: vem do campo Pos.IPI/NCM da SB1 e aparece junto do produto e de cada similar. Quando o produto e o similar têm NCM diferente, o painel avisa — vale conferir qual está certo antes de bloquear, porque o código que fica leva o NCM dele. NCM 0000.00.00 ou vazio conta como “sem NCM”.</p>
       <p>Empresas: a 02 e a 10 têm cada uma o seu cadastro (SB1). O mesmo código pode ter descrições diferentes em cada empresa, então a comparação, o saldo, a previsão e o ponto de pedido são sempre calculados dentro da mesma empresa.</p>
       <p>Onde ficam os dados: as medições publicadas estão na pasta <code>dados/</code> do repositório. Uma medição salva e ainda não enviada ao GitHub fica só no navegador de quem a gerou. Para atualizar, o jeito mais rápido é colocar as planilhas na pasta <code>planilhas</code> do app e rodar o <code>PUBLICAR.bat</code>: ele calcula a medição no computador e publica só o resultado.</p>
     </div>

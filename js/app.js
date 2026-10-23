@@ -55,7 +55,7 @@
   var ST = {
     snaps: [], viewId: null, cur: null, saved: null, preview: null, loadingId: null,
     scope: store("scope") || "all", tab: store("tab") || "saldo",
-    bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null, mk: store("mk") || ""
+    bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null, mk: store("mk") || "", ncm: ""
   };
   var PAGE = 50;
 
@@ -133,8 +133,9 @@
     buildAdj(obj);
     obj.D.I = obj.D.I || [];
     obj.tipos = Array.from(new Set(obj.D.P.concat(obj.D.I).map(function (p) { return p[3]; }).filter(Boolean))).sort();
-    obj.inSearch = obj.D.I.map(function (p) { return (p[1] + " " + p[2]).toUpperCase(); });
-    obj.search = obj.D.P.map(function (p) { return (p[1] + " " + p[2]).toUpperCase(); });
+    var busca = function (p, n) { n = n || ""; return (p[1] + " " + p[2] + (n ? " " + n + " " + n.replace(/\D/g, "") : "")).toUpperCase(); };
+    obj.inSearch = obj.D.I.map(function (p) { return busca(p, p[10]); });
+    obj.search = obj.D.P.map(function (p) { return busca(p, p[9]); });
     obj.filIndex = {}; obj.D.filiais.forEach(function (f, i) { obj.filIndex[f] = i; });
     obj.keyIdx = {}; obj.D.P.forEach(function (p, i) { obj.keyIdx[p[0] + "|" + p[1]] = i; });
     obj.inKey = {}; obj.D.I.forEach(function (p, i) { obj.inKey[p[0] + "|" + p[1]] = i; });
@@ -176,6 +177,7 @@
     $("q").addEventListener("input", debounce(function () { ST.q = $("q").value.trim().toUpperCase(); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); }, 200));
     $("fSit").addEventListener("change", function () { ST.sit = $("fSit").value; ST.page = 0; refreshFilters(false); });
     $("fTipo").addEventListener("change", function () { ST.tipo = $("fTipo").value; ST.page = 0; renderTabs(); renderTable(); });
+    $("fNcm").addEventListener("change", function () { ST.ncm = $("fNcm").value; ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); });
     $("fMk").addEventListener("change", function () { setMk($("fMk").value); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); });
     $("btnCsv").addEventListener("click", exportXlsx);
     $("btnCsv").hidden = false;
@@ -296,6 +298,7 @@
         MK.on ? h("span", { cls: "mk-flag" }, [h("span", { cls: "sw", style: "background:var(--ok);border-radius:50%" }), n(progFor(ST.scope.slice(2)).livre) + " já marcados como bloqueados"]) : null]),
       delta: delta(A.L1 + A.L2, PA && (PA.L1 + PA.L2), pd, true), fn: function () { goTab("prod", "livre"); },
       pressed: ST.tab === "prod" && ST.sit === "livre", go: "Ver lista", title: "Listar os produtos que podem ser bloqueados" });
+    renderNcmNote();
     var note = $("inatNote"), inat = A.inat || 0;
     note.hidden = !inat;
     if (inat) note.textContent = (inat === 1 ? "1 produto inativo (Ativo = N) ficou fora da análise" : n(inat) + " produtos inativos (Ativo = N) ficaram fora da análise") +
@@ -322,7 +325,7 @@
   function goList(bk, sk) {
     ST.tab = "prod"; store("tab", "prod");
     ST.bands = onlyOf(bk);
-    ST.sit = sk; setMk(""); ST.page = 0; ST.expanded = null;
+    ST.sit = sk; setMk(""); ST.ncm = ""; ST.page = 0; ST.expanded = null;
     refreshFilters(true);
   }
   function onlyBand() {
@@ -333,14 +336,14 @@
   function goBand(bk) {
     if (onlyBand() === bk) ST.bands = allBands();
     else ST.bands = onlyOf(bk);
-    setMk("");
+    setMk(""); ST.ncm = "";
     // a lista mostra o mesmo total do indicador: todos os produtos daquela faixa
     if (ST.tab === "saldo") { ST.tab = "prod"; ST.sit = ""; store("tab", "prod"); }
     ST.page = 0; ST.expanded = null;
     refreshFilters(true);
   }
   function goTab(tab, sit) {
-    ST.tab = tab; store("tab", tab); ST.sit = sit || ""; setMk("");
+    ST.tab = tab; store("tab", tab); ST.sit = sit || ""; setMk(""); ST.ncm = "";
     ST.bands = allBands();
     ST.page = 0; ST.expanded = null;
     refreshFilters(true);
@@ -614,7 +617,7 @@
   }
   function goMk(mk, sit) {
     ST.tab = "prod"; store("tab", "prod");
-    ST.sit = sit || ""; setMk(mk);
+    ST.sit = sit || ""; setMk(mk); ST.ncm = "";
     ST.bands = allBands(); ST.page = 0; ST.expanded = null;
     refreshFilters(true);
   }
@@ -765,6 +768,7 @@
         else if (I.cat[i] !== sit) continue;
       }
       if (ST.tipo && P[i][3] !== ST.tipo) continue;
+      if (ST.ncm && temNcm()) { var nr = ST.ncm === "sem" ? (ncmOf(i) ? "tem" : "sem") : ncmRel(i, I.bestP[i]); if (nr !== ST.ncm) continue; }
       if (MK.on && ST.mk) { var mkd = !!mkOf(i); if (ST.mk === "nao" ? mkd : ST.mk === "sim" ? !mkd : !mkConf(i)) continue; }
       if (ST.q && cur.search[i].indexOf(ST.q) < 0) continue;
       out.push(i);
@@ -805,6 +809,11 @@
     ST.cur.tipos.forEach(function (t) { ft.appendChild(h("option", { value: t, text: "Tipo " + t })); });
     if (ST.cur.tipos.indexOf(ST.tipo) < 0) ST.tipo = "";
     ft.value = ST.tipo;
+    var fn = $("fNcm"); fn.hidden = !temNcm();
+    if (!fn.options.length) [["", "Todos os NCM"], ["dif", "NCM diferente do similar"], ["igual", "NCM igual ao do similar"], ["sem", "Sem NCM"]]
+      .forEach(function (o) { fn.appendChild(h("option", { value: o[0], text: o[1] })); });
+    if (!temNcm()) ST.ncm = "";
+    fn.value = ST.ncm;
     var fm = $("fMk"); fm.hidden = !MK.on;
     if (!fm.options.length) [["", "Marcados e não marcados"], ["nao", "Ainda não marcados"], ["sim", "Marcados como bloqueados"], ["conf", "Marcados · a conferir"]]
       .forEach(function (o) { fm.appendChild(h("option", { value: o[0], text: o[1] })); });
@@ -815,8 +824,56 @@
     var sitLbl = ST.sit === "prot" ? "não bloquear" : ST.sit === "livre" ? "podem ser bloqueados" : ST.sit ? SIT[ST.sit].label.toLowerCase() : "";
     $("tblSub").textContent = tab.sub + " · " + scopeName(ST.scope) + (fx.length < BANDS.length ? " · faixa " + (fx.length ? fx.join(", ") : "nenhuma") : "") +
       (sitLbl && ST.tab === "prod" ? " · " + sitLbl : "") +
+      (temNcm() && ST.ncm ? " · " + NCM_FILTRO[ST.ncm] : "") +
       (MK.on && ST.mk ? " · " + { nao: "ainda não marcados", sim: "marcados como bloqueados", conf: "marcados antes da medição e ainda ativos" }[ST.mk] : "") +
       ". Clique num produto para ver todos os similares" + (MK.on && !MK.readonly ? "; marque a caixa quando bloquear no Protheus." : ".");
+  }
+
+  // ---------- NCM (campo Pos.IPI/NCM da SB1) ----------
+  function temNcm() { return !!(ST.cur && ST.cur.D.totals && ST.cur.D.totals.hasNcm); }
+  function ncmOf(i) { return ST.cur.D.P[i][9] || ""; }
+  function ncmOk(n) { return /^\d{4}\.\d{2}\.\d{2}$/.test(n); }
+  function ncmRel(i, j) { var a = ncmOf(i), b = j >= 0 ? ncmOf(j) : ""; return !a || !b ? "sem" : a === b ? "igual" : "dif"; }
+  var NCM_FILTRO = { igual: "NCM igual ao do similar", dif: "NCM diferente do similar", sem: "sem NCM" };
+  // etiqueta comparando o NCM de j com o do produto i
+  function ncmCmp(i, j, curto) {
+    if (!temNcm() || j < 0) return null;
+    var r = ncmRel(i, j), b = ncmOf(j);
+    if (r === "igual") return h("div", { cls: "tags" }, [h("span", { cls: "tag ncm-eq", text: "NCM igual" })]);
+    if (r === "dif") return h("div", { cls: "tags" }, [h("span", { cls: "tag ncm-dif", title: "NCM do produto: " + ncmOf(i) + " · NCM do similar: " + b, text: curto ? "NCM diferente do produto" : "NCM diferente: " + b })]);
+    if (!b) return h("div", { cls: "tags" }, [h("span", { cls: "tag ncm-dif", text: "Similar sem NCM" })]);
+    return null;
+  }
+  function goNcm(v) {
+    ST.tab = "prod"; store("tab", "prod"); ST.sit = ""; setMk(""); ST.ncm = v;
+    ST.bands = allBands(); ST.page = 0; ST.expanded = null;
+    refreshFilters(true);
+  }
+  function renderNcmNote() {
+    var box = $("ncmNote"); if (!box) return;
+    box.textContent = "";
+    var tot = ST.cur.D.totals || {};
+    if (!temNcm()) {
+      box.hidden = false;
+      box.appendChild(document.createTextNode(tot.hasNcm === false ? "A SB1 desta medição veio sem a coluna Pos.IPI/NCM, então o NCM não aparece."
+        : "O NCM dos produtos aparece a partir da próxima atualização da base."));
+      return;
+    }
+    var P = ST.cur.D.P, I = ST.cur.R.info, inS = inScopeFn(), dif = 0, sem = 0;
+    for (var i = 0; i < P.length; i++) {
+      if (!inS(i)) continue;
+      if (!ncmOf(i)) sem++;
+      else if (ncmRel(i, I.bestP[i]) === "dif") dif++;
+    }
+    box.hidden = !(dif || sem);
+    var lnk = function (txt, v) { return h("button", { cls: "lnk", type: "button", text: txt, onclick: function () { goNcm(v); } }); };
+    var t = h("span");
+    t.appendChild(document.createTextNode("NCM: "));
+    if (dif) { t.appendChild(lnk(n(dif) + (dif === 1 ? " produto tem" : " produtos têm") + " NCM diferente do similar mais parecido", "dif")); t.appendChild(document.createTextNode(" — confira qual está certo antes de bloquear")); }
+    if (dif && sem) t.appendChild(document.createTextNode(" · "));
+    if (sem) t.appendChild(lnk(n(sem) + (sem === 1 ? " produto sem NCM" : " produtos sem NCM"), "sem"));
+    t.appendChild(document.createTextNode("."));
+    box.appendChild(t);
   }
 
   function prodCell(i, compact) {
@@ -824,7 +881,13 @@
     var kids = [h("span", { cls: "p-cod", text: p[1] }), h("span", { cls: "p-desc", text: p[2] })];
     if (!compact) {
       var meta = [p[3] ? "Tipo " + p[3] : "", p[5], p[4] ? "Grupo " + p[4] : "", "Emp. " + p[0]].filter(Boolean).join(" · ");
-      kids.push(h("span", { cls: "p-meta", text: meta }));
+      var mk2 = [meta];
+      if (temNcm()) {
+        var nc = p[9] || "";
+        mk2.push(" · ");
+        mk2.push(nc ? h("span", { cls: ncmOk(nc) ? "ncm" : "ncm bad", title: "Pos.IPI/NCM (SB1)", text: "NCM " + nc + (ncmOk(nc) ? "" : " (incompleto)") }) : h("span", { cls: "ncm bad", text: "sem NCM" }));
+      }
+      kids.push(h("span", { cls: "p-meta" }, mk2));
     }
     return h("div", null, kids);
   }
@@ -848,6 +911,12 @@
     return P[a][1] <= P[b][1] ? a : b;
   }
   function productAction(i) {
+    var el = acaoBase(i), bp = ST.cur.R.info.bestP[i];
+    if (temNcm() && !mkOf(i) && bp >= 0 && ncmRel(i, bp) === "dif")
+      el.appendChild(h("span", { cls: "mk-warn", text: "NCM diferente do similar: confira qual está certo antes de bloquear" }));
+    return el;
+  }
+  function acaoBase(i) {
     var I = ST.cur.R.info, P = ST.cur.D.P;
     var nbs = neighbors(i), keep = null, e = mkOf(i);
     if (e) {
@@ -890,7 +959,7 @@
         (mkOn ? [h("td", { cls: "mkc" }, [mkBox(i)])] : []).concat([
         h("td", null, [prodCell(i)]),
         h("td", null, [statusTags(i, true)]),
-        h("td", null, bp >= 0 ? [h("div", { cls: "sim" }, [scorePill(I.best[i]), h("div", null, [prodCell(bp, true), statusTags(bp)])])] : []),
+        h("td", null, bp >= 0 ? [h("div", { cls: "sim" }, [scorePill(I.best[i]), h("div", null, [prodCell(bp, true), statusTags(bp), ncmCmp(i, bp)])])] : []),
         h("td", { cls: "r num", text: n(nSim(i)) }),
         h("td", null, [productAction(i)])
       ]));
@@ -901,7 +970,7 @@
           var dn = mkOn && !!mkOf(x[0]);
           return h("div", { cls: "s" + (mkOn ? " with-mk" : "") + (dn ? " is-done" : "") }, (mkOn ? [h("div", null, [mkBox(x[0])])] : []).concat([
             h("div", null, [scorePill(x[1])]),
-            h("div", null, [prodCell(x[0], false), statusTags(x[0], true), dn ? h("span", { cls: "p-meta mk-ok", text: "Marcado como bloqueado em " + dt(mkWhen(mkOf(x[0])), true) }) : null])]));
+            h("div", null, [prodCell(x[0], false), statusTags(x[0], true), ncmCmp(i, x[0], true), dn ? h("span", { cls: "p-meta mk-ok", text: "Marcado como bloqueado em " + dt(mkWhen(mkOf(x[0])), true) }) : null])]));
         }));
         var more = all.length > 40 ? h("p", { cls: "note", text: "Mostrando os 40 mais parecidos de " + n(all.length) + "." }) : null;
         body.appendChild(h("tr", { cls: "expand" }, [h("td", { colspan: String(head.length) }, [h("div", { cls: "eyebrow", style: "margin-bottom:8px", text: "Todos os similares de " + P[i][1] + " · " + P[i][2] }), sims, more])]));
@@ -943,6 +1012,13 @@
       rows.push([P[i][0], P[i][1], P[i][2], P[i][3], P[i][4], P[i][5], r3(I.saldo[i]), r3(I.prev[i]), r3(I.pp[i]), sitText(i), I.best[i], BAND[I.band[i]].label,
         bp >= 0 ? P[bp][1] : "", bp >= 0 ? P[bp][2] : "", bp >= 0 ? sitText(bp) : "", nSim(i), acao, ondeTem(P[i][8])].concat(MK.on ? [mkOf(i) ? "Sim" : "Não", mkOf(i) ? dt(mkWhen(mkOf(i)), true) : ""] : []));
     });
+    if (temNcm()) {
+      headers.splice(6, 0, "NCM"); headers.splice(15, 0, "NCM similar", "NCM igual ao do similar");
+      rows.forEach(function (r, k) {
+        var i = list[k], bp = I.bestP[i], rel = bp >= 0 ? ncmRel(i, bp) : "sem";
+        r.splice(6, 0, ncmOf(i)); r.splice(15, 0, bp >= 0 ? ncmOf(bp) : "", rel === "igual" ? "Sim" : rel === "dif" ? "Não" : "Sem NCM");
+      });
+    }
     return { headers: headers, rows: rows };
   }
   async function exportXlsx() {
@@ -952,6 +1028,7 @@
     try {
       var t = tabelaExportar();
       var nomes = { saldo: ["com_saldo", "Com saldo e similar"], prod: ["produtos", "Produtos com similar"] }[ST.tab] || ["produtos", "Produtos com similar"];
+      if (temNcm() && ST.ncm) nomes = [nomes[0] + "_ncm_" + { dif: "diferente", igual: "igual", sem: "vazio" }[ST.ncm], nomes[1]];
       if (MK.on && ST.mk) nomes = [nomes[0] + "_" + { nao: "nao_marcados", sim: "marcados", conf: "a_conferir" }[ST.mk], nomes[1]];
       var scopeTag = "empresa" + ST.scope.slice(2);
       var blob = await XlsxWriter.build({ sheet: nomes[1], headers: t.headers, rows: t.rows });

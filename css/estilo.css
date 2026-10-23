@@ -303,6 +303,15 @@ button.pg-stat::after { content: "Ver lista →"; font-size: 11px; font-weight: 
 .toast .btn { background: transparent; color: var(--bg); border-color: color-mix(in srgb, var(--bg) 35%, transparent); }
 .toast .btn:hover { background: color-mix(in srgb, var(--bg) 14%, transparent); }
 [hidden] { display: none !important; }
+
+/* ---------- NCM ---------- */
+.p-meta .ncm { font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); }
+.p-meta .ncm.bad { font-family: var(--font-ui); color: var(--warn); font-weight: 600; }
+.tag.ncm-eq { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
+.tag.ncm-dif { color: var(--warn); background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); font-weight: 600; }
+.ncm-note::before { background: var(--accent) !important; }
+.inat-note button.lnk { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.inat-note { flex-wrap: wrap; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 body { margin: 0; }
 [hidden] { display: none !important; }

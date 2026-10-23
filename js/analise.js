@@ -17,7 +17,8 @@ var DupAnalysis = (function () {
       desc: ["descricao", "b1_desc", "desc. produto"], tipo: ["tipo", "b1_tipo"], grupo: ["grupo", "b1_grupo"],
       um: ["unidade", "b1_um"], ucom: ["ult. compra", "b1_ucom"],
       blq: ["bloqueado", "blq. de tela", "blq.de tela", "b1_msblql", "bloqueio", "bloqueado?"],
-      ativo: ["ativo", "b1_ativo", "ativo?"] } },
+      ativo: ["ativo", "b1_ativo", "ativo?"],
+      ncm: ["pos.ipi/ncm", "pos. ipi/ncm", "pos.ipi / ncm", "b1_posipi", "ncm", "cod. ncm", "codigo ncm"] } },
     SBZ: { label: "SBZ · Indicadores (ponto de pedido)", need: ["cod", "pp"], cols: {
       filial: ["filial", "bz_filial"], cod: ["codigo", "bz_cod", "produto"], pp: ["ponto pedido", "bz_emin"] } },
     SB2: { label: "SB2 · Saldo físico", need: ["cod", "saldo"], cols: {
@@ -56,6 +57,15 @@ var DupAnalysis = (function () {
     if (m) return m[3] + "-" + m[2] + "-" + m[1];
     m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
     return m ? m[0] : "";
+  }
+  // NCM: 8 dígitos no formato 0000.00.00 (o Excel pode ter tirado o zero à esquerda ou os pontos)
+  function cleanNcm(v) {
+    var s = String(v == null ? "" : v).trim();
+    if (/^\d+\.0+$/.test(s)) s = s.replace(/\.0+$/, "");
+    var d = s.replace(/\D/g, "");
+    if (!d || /^0+$/.test(d)) return "";
+    if (d.length === 7 && /^\d+$/.test(s)) d = "0" + d;
+    return d.length === 8 ? d.slice(0, 4) + "." + d.slice(4, 6) + "." + d.slice(6) : s;
   }
   function cleanCode(v) {
     var s = String(v == null ? "" : v).trim();
@@ -124,7 +134,7 @@ var DupAnalysis = (function () {
     await XlsxStream.read(blob, name, visitor, onProgress);
     if (!kind) return { kind: null, name: name, rows: 0, error: "Não reconheci esta planilha (esperava SB1, SBZ ou SB2/Saldo físico)." };
     return { kind: kind, label: SPECS[kind].label, name: name, rows: rows, data: data,
-      hasBlq: kind === "SB1" && map.blq >= 0, hasAtivo: kind === "SB1" && map.ativo >= 0 };
+      hasBlq: kind === "SB1" && map.blq >= 0, hasAtivo: kind === "SB1" && map.ativo >= 0, hasNcm: kind === "SB1" && map.ncm >= 0 };
   }
 
   // tables: array of readTable results. runJoin(strings, T, onProgress) -> Promise<{a,b,s,n}>
@@ -195,7 +205,7 @@ var DupAnalysis = (function () {
               inativos.push({ emp: emp, cod: cod, desc: String(d.desc[i] == null ? "" : d.desc[i]).trim(),
                 tipo: d.tipo ? String(d.tipo[i]).trim() : "", grupo: d.grupo ? cleanCode(d.grupo[i]) : "",
                 um: d.um ? String(d.um[i]).trim() : "", ucom: d.ucom ? parseDate(d.ucom[i]) : "",
-                motivo: bloq ? "Bloqueado" : "Ativo = N" });
+                motivo: bloq ? "Bloqueado" : "Ativo = N", ncm: d.ncm ? cleanNcm(d.ncm[i]) : "" });
             }
             continue;
           }
@@ -205,7 +215,7 @@ var DupAnalysis = (function () {
           var desc = String(d.desc[i] == null ? "" : d.desc[i]).trim();
           prods.push({ emp: emp, cod: cod, desc: desc, tipo: d.tipo ? String(d.tipo[i]).trim() : "",
             grupo: d.grupo ? cleanCode(d.grupo[i]) : "", um: d.um ? String(d.um[i]).trim() : "",
-            ucom: d.ucom ? parseDate(d.ucom[i]) : "" });
+            ucom: d.ucom ? parseDate(d.ucom[i]) : "", ncm: d.ncm ? cleanNcm(d.ncm[i]) : "" });
         }
       });
     } else {
@@ -276,7 +286,7 @@ var DupAnalysis = (function () {
         pres.push(fi);
         if (v[0] || v[1] || v[2]) st.push([fi, round3(v[0]), round3(v[1]), round3(v[2])]);
       });
-      P[pi] = [p.emp, p.cod, p.desc, p.tipo, p.grupo, p.um, p.ucom, pres, st];
+      P[pi] = [p.emp, p.cod, p.desc, p.tipo, p.grupo, p.um, p.ucom, pres, st, p.ncm || ""];
     });
     function rowOf(p) {
       var pres = [], st = [], m = stockOf(p);
@@ -286,7 +296,7 @@ var DupAnalysis = (function () {
         pres.push(fi);
         if (v[0] || v[1] || v[2]) st.push([fi, round3(v[0]), round3(v[1]), round3(v[2])]);
       });
-      return [p.emp, p.cod, p.desc, p.tipo, p.grupo, p.um, p.ucom, pres, st, p.motivo];
+      return [p.emp, p.cod, p.desc, p.tipo, p.grupo, p.um, p.ucom, pres, st, p.motivo, p.ncm || ""];
     }
     var INAT = inativos.map(rowOf);
     return {
@@ -294,7 +304,8 @@ var DupAnalysis = (function () {
       files: tables.map(function (t) { return { name: t.name, kind: t.kind, rows: t.rows }; }),
       empresas: empresas, filiais: filiais,
       totals: { prodPorEmp: prodPorEmp, prodPorFilial: prodPorFilial, excl: excl,
-        hasBlq: sb1.some(function (t) { return t.hasBlq; }), hasAtivo: sb1.some(function (t) { return t.hasAtivo; }) },
+        hasBlq: sb1.some(function (t) { return t.hasBlq; }), hasAtivo: sb1.some(function (t) { return t.hasAtivo; }),
+        hasNcm: sb1.some(function (t) { return t.hasNcm; }) },
       P: P, pairs: pairsOut, I: INAT
     };
   }
