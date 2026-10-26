@@ -1160,7 +1160,7 @@
   }
   function filaLado(i, papel, extra, cls) {
     var p = ST.cur.D.P[i], gt = grupoTexto(i), nc = temNcm() ? p[9] : "";
-    var sub = [gt, nc ? "NCM " + nc : ""].filter(Boolean).join(" · ");
+    var nd = nc ? ncmDesc(nc) : "", sub = [gt, nc ? "NCM " + nc + (nd ? " – " + nd : "") : ""].filter(Boolean).join(" · ");
     return h("div", { cls: "fside " + papel }, [
       h("small", { text: papel === "b" ? "Bloquear" : papel === "k" ? "Manter" : "Bloqueado" }),
       h("div", { cls: "fname" }, [h("span", { cls: "p-cod", text: p[1] }), h("span", { cls: "p-desc", text: p[2] })]),
@@ -1217,15 +1217,15 @@
     btn.disabled = true; btn.textContent = "Gerando…";
     try {
       var P = ST.cur.D.P, list = filaFiltrada(filaDados()), I = ST.cur.R.info;
-      var headers = ["Empresa", "Bloquear: código", "Bloquear: descrição", "Grupo", "Descrição do grupo", "NCM", "Última compra",
-        "Manter: código", "Manter: descrição", "Grupo (manter)", "NCM (manter)", "Por que manter", "Semelhança %", "Avisos", "Bloqueado no app", "Marcado em"];
+      var headers = ["Empresa", "Bloquear: código", "Bloquear: descrição", "Grupo", "Descrição do grupo", "NCM", "Descrição do NCM", "Última compra",
+        "Manter: código", "Manter: descrição", "Grupo (manter)", "NCM (manter)", "Descrição do NCM (manter)", "Por que manter", "Semelhança %", "Avisos", "Bloqueado no app", "Marcado em"];
       var rows = list.map(function (x) {
         var i = x.i, k = x.keep, av = [];
         if (k >= 0 && P[i][9] && P[k][9] && P[i][9] !== P[k][9]) av.push("NCM diferente");
         if (k >= 0 && grupoCod(i) && grupoCod(k) && grupoCod(i) !== grupoCod(k)) av.push("Grupo diferente");
         var e = mkOf(i);
-        return [P[i][0], P[i][1], P[i][2], grupoCod(i), grupoTexto(i, false), P[i][9] || "", P[i][6] || "",
-          k >= 0 ? P[k][1] : "", k >= 0 ? P[k][2] : "", k >= 0 ? grupoTexto(k) : "", k >= 0 ? (P[k][9] || "") : "",
+        return [P[i][0], P[i][1], P[i][2], grupoCod(i), grupoTexto(i, false), P[i][9] || "", ncmDesc(P[i][9]), P[i][6] || "",
+          k >= 0 ? P[k][1] : "", k >= 0 ? P[k][2] : "", k >= 0 ? grupoTexto(k) : "", k >= 0 ? (P[k][9] || "") : "", k >= 0 ? ncmDesc(P[k][9]) : "",
           k < 0 ? "" : I.prot[k] ? "Em uso: " + usoTxt(k) : compraTxt(k), x.sc, av.join(" · "), e ? "Sim" : "Não", e ? dt(mkWhen(e), true) : ""];
       });
       var nome = { b95: "95-100", b80: "80-94", feito: "ja_marcados" }[ST.fb] || "lista";
