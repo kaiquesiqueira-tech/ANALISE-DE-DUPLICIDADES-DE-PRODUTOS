@@ -55,7 +55,8 @@
   var ST = {
     snaps: [], viewId: null, cur: null, saved: null, preview: null, loadingId: null,
     scope: store("scope") || "all", tab: store("tab") || "saldo",
-    bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null, mk: store("mk") || "", ncm: "", ncmTab: null, grupos: {}
+    bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null, mk: store("mk") || "", ncm: "", ncmTab: null, grupos: {},
+    view: store("view") || "bloq", fb: "b95", fg: "", fq: "", fpage: 0, fexp: null, ffocus: null
   };
   var PAGE = 50;
 
@@ -183,6 +184,9 @@
     $("fMk").addEventListener("change", function () { setMk($("fMk").value); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); });
     $("btnCsv").addEventListener("click", exportXlsx);
     $("btnCsv").hidden = false;
+    $("fq").addEventListener("input", debounce(function () { ST.fq = $("fq").value.trim().toUpperCase(); ST.fpage = 0; ST.fexp = null; renderFila(); }, 200));
+    $("fGrupo").addEventListener("change", function () { ST.fg = $("fGrupo").value; ST.fpage = 0; ST.fexp = null; renderFila(); });
+    $("btnFilaXls").addEventListener("click", exportFila);
     if (window.ResizeObserver) {
       var ro = new ResizeObserver(debounce(function () { renderCharts(); }, 120));
       ro.observe($("kpis"));
@@ -228,6 +232,8 @@
     if (!ST.cur) return;
     renderMeta();
     renderScope();
+    renderViews();
+    renderFila();
     renderKpis();
     renderProg();
     renderMatrix();
@@ -238,10 +244,7 @@
     renderSaveState();
   }
   function renderMeta() {
-    var D = ST.cur.D, txt = (ST.preview ? "Prévia de " : "Medição de ") + dt(D.at, true);
-    var kinds = {};
-    D.files.forEach(function (f) { if (f.kind) kinds[f.kind] = (kinds[f.kind] || 0) + 1; });
-    txt += " · " + Object.keys(kinds).sort().map(function (k) { return kinds[k] > 1 ? k + " (" + kinds[k] + " arquivos)" : k; }).join(", ");
+    var D = ST.cur.D, txt = (ST.preview ? "Prévia da base de " : "Base de ") + dt(D.at, true);
     if (D.descSource === "SB2") txt += " · descrição do Saldo Físico (sem SB1)";
     if (!ST.preview && ST.cur.doc && ST.cur.doc.origem === "local") txt += " · salva só neste navegador (falta enviar ao GitHub)";
     $("meta").textContent = txt;
@@ -279,11 +282,11 @@
         h("div", { cls: "split" }, BANDS.map(function (b) { return h("i", { style: "flex:" + Math.max(A[b.k] || 0, totB ? totB * 0.01 : 1) + ";background:" + b.color }); })),
         h("div", { cls: "split-leg", style: "margin-top:6px" }, BANDS.map(function (b) { return h("span", null, [sw(b.color), b.label + " " + pct(A[b.k], totB)]); }))]),
       delta: delta(A.comSim, PA && PA.comSim, pd, true), fn: function () { goTab("prod", ""); },
-      pressed: ST.tab === "prod" && !only && !ST.sit, go: "Ver todos", title: "Listar todos os produtos com similar" });
+      pressed: false, go: "Abrir a lista Bloquear", title: "Abrir a lista do que bloquear" });
     BANDS.forEach(function (b) {
       tile({ label: [sw(b.color), b.label], val: n(A[b.k]), sub: b.name.charAt(0).toUpperCase() + b.name.slice(1) + " · " + n(A.pairs[b.k]) + " pares",
-        delta: delta(A[b.k], PA && PA[b.k], pd, true), fn: function () { goBand(b.k); }, pressed: only === b.k,
-        go: only === b.k ? "Mostrar as duas faixas" : "Ver só esta faixa", title: "Listar os produtos da faixa " + b.label });
+        delta: delta(A[b.k], PA && PA[b.k], pd, true), fn: function () { goBand(b.k); }, pressed: false,
+        go: "Ver na lista Bloquear", title: "Abrir a lista Bloquear na faixa " + b.label });
     });
     var prot = A.S + A.P + A.R;
     tile({ label: [h("span", { cls: "sw", style: "background:var(--cS);border-radius:50%" }), "Não bloquear"], val: n(prot), sub: "Têm saldo, previsão ou ponto de pedido",
@@ -297,9 +300,9 @@
       extra: h("div", { cls: "flags" }, [
         h("span", null, [sw("var(--cL1)"), n(A.L1) + " com similar em uso (mais seguros)"]),
         h("span", null, [sw("var(--cL2)"), n(A.L2) + " com similar também livre"]),
-        MK.on ? h("span", { cls: "mk-flag" }, [h("span", { cls: "sw", style: "background:var(--ok);border-radius:50%" }), n(progFor(ST.scope.slice(2)).livre) + " já marcados como bloqueados"]) : null]),
-      delta: delta(A.L1 + A.L2, PA && (PA.L1 + PA.L2), pd, true), fn: function () { goTab("prod", "livre"); },
-      pressed: ST.tab === "prod" && ST.sit === "livre", go: "Ver lista", title: "Listar os produtos que podem ser bloqueados" });
+        h("span", { cls: "mk-flag" }, [h("span", { cls: "sw", style: "background:var(--ok);border-radius:50%" }), (function () { var F = filaDados(); return n(F.pend.length) + " na lista Bloquear (cada par conta uma vez)" + (MK.on && F.feitos.length ? " · " + n(F.feitos.length) + " já marcados" : ""); })()])]),
+      delta: delta(A.L1 + A.L2, PA && (PA.L1 + PA.L2), pd, true), fn: function () { goFila("b95"); },
+      pressed: false, go: "Abrir a lista Bloquear", title: "Abrir a lista do que bloquear" });
     renderNcmNote();
     var note = $("inatNote"), inat = A.inat || 0;
     note.hidden = !inat;
@@ -325,30 +328,18 @@
     box.appendChild(h("table", { cls: "mx" }, [h("thead", null, [g1, g2]), h("tbody", null, rows.concat([tot]))]));
   }
   function goList(bk, sk) {
-    ST.tab = "prod"; store("tab", "prod");
-    ST.bands = onlyOf(bk);
-    ST.sit = sk; setMk(""); ST.ncm = ""; ST.page = 0; ST.expanded = null;
-    refreshFilters(true);
+    if (sk === "L1" || sk === "L2" || sk === "livre") { goFila(bk); return; }
+    goNb(sk, bk);
   }
   function onlyBand() {
     var on = BANDS.filter(function (b) { return ST.bands[b.k]; });
     return on.length === 1 ? on[0].k : null;
   }
   // Clique num indicador de faixa: lista só aquela faixa (clicar de novo volta para todas)
-  function goBand(bk) {
-    if (onlyBand() === bk) ST.bands = allBands();
-    else ST.bands = onlyOf(bk);
-    setMk(""); ST.ncm = "";
-    // a lista mostra o mesmo total do indicador: todos os produtos daquela faixa
-    if (ST.tab === "saldo") { ST.tab = "prod"; ST.sit = ""; store("tab", "prod"); }
-    ST.page = 0; ST.expanded = null;
-    refreshFilters(true);
-  }
+  function goBand(bk) { goFila(bk); }
   function goTab(tab, sit) {
-    ST.tab = tab; store("tab", tab); ST.sit = sit || ""; setMk(""); ST.ncm = "";
-    ST.bands = allBands();
-    ST.page = 0; ST.expanded = null;
-    refreshFilters(true);
+    if (sit === "prot") goNb("prot");
+    else goFila("b95");
   }
   function refreshFilters(scroll) {
     renderKpis(); renderMatrix(); renderTabs(); renderTable();
@@ -524,7 +515,7 @@
     mkTimer = setTimeout(function () {
       mkTimer = 0;
       if (!ST.cur || !mounted) return;
-      renderKpis(); renderProg(); renderTabs(); renderTable(); renderSaveState();
+      renderKpis(); renderProg(); renderTabs(); renderTable(); renderFila(); renderSaveState();
     }, 16);
   }
   function setMk(v) { ST.mk = v || ""; store("mk", ST.mk); }
@@ -618,22 +609,21 @@
     return R;
   }
   function goMk(mk, sit) {
-    ST.tab = "prod"; store("tab", "prod");
-    ST.sit = sit || ""; setMk(mk); ST.ncm = "";
-    ST.bands = allBands(); ST.page = 0; ST.expanded = null;
-    refreshFilters(true);
+    if (sit === "prot") { goNb("prot", null, mk); return; }
+    goFila(mk === "nao" ? "b95" : "feito");
   }
   function renderProg() {
     var box = $("pProg"); if (!box) return;
     box.hidden = !MK.on;
     if (!MK.on || !ST.cur) return;
-    var emp = ST.scope.slice(2), A = aggFor(ST.cur.R.summary, ST.scope) || {}, R = progFor(emp), livres = (A.L1 || 0) + (A.L2 || 0);
+    var emp = ST.scope.slice(2), R = progFor(emp), FD = filaDados(), livres = FD.pend.length + FD.feitos.length;
+    R.livre = FD.feitos.length;
     $("progSub").textContent = "Empresa " + emp + " · " + MarkStore.note;
     var acts = $("progActions"); acts.textContent = "";
     MarkStore.extra(R).forEach(function (b) { acts.appendChild(b); });
-    if (R.total) acts.appendChild(h("button", { cls: "btn small", type: "button", text: "Ver marcados", onclick: function () { goMk("sim", ""); } }));
+    if (R.total) acts.appendChild(h("button", { cls: "btn small", type: "button", text: "Ver marcados", onclick: function () { goFila("feito"); } }));
     acts.appendChild(h("button", { cls: "btn small primary", type: "button", text: "Continuar bloqueando →", title: "Lista dos que podem ser bloqueados e ainda não foram marcados",
-      onclick: function () { goMk("nao", "livre"); } }));
+      onclick: function () { goFila("b95"); } }));
 
     var main = $("progMain"); main.textContent = "";
     var pc = livres ? Math.min(100, 100 * R.livre / livres) : 0;
@@ -641,7 +631,7 @@
       h("span", { cls: "pg-unit", text: R.total === 1 ? "produto marcado como bloqueado" : "produtos marcados como bloqueados" })]));
     main.appendChild(h("div", { cls: "pbar", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(pc)),
       "aria-label": "Marcados entre os que podem ser bloqueados" }, [h("i", { style: "width:" + (R.livre ? "max(4px, " + pc + "%)" : "0") })]));
-    main.appendChild(h("div", { cls: "pg-cap" }, [h("strong", { cls: "num", text: n(R.livre) }), " dos " + n(livres) + " que podem ser bloqueados nesta medição (" + (R.livre && 1000 * R.livre < livres ? "menos de 0,1%" : pct(R.livre, livres)) + ")"]));
+    main.appendChild(h("div", { cls: "pg-cap" }, [h("strong", { cls: "num", text: n(R.livre) }), " dos " + n(livres) + " da lista Bloquear desta medição (" + (R.livre && 1000 * R.livre < livres ? "menos de 0,1%" : pct(R.livre, livres)) + ")"]));
 
     var st = $("progStats"); st.textContent = "";
     function stat(o) {
@@ -799,7 +789,7 @@
     });
     // situação
     var fs = $("fSit"); fs.textContent = "";
-    var opts = ST.tab === "prod" ? [["", "Todas as situações"], ["prot", "Não bloquear"], ["livre", "Podem ser bloqueados"]].concat(SITS.map(function (x) { return [x.k, "· " + x.label]; })) : null;
+    var opts = ST.tab === "prod" ? [["prot", "Não bloquear (saldo, previsão ou ponto de pedido)"]].concat(SITS.filter(function (x) { return x.grp === "keep"; }).map(function (x) { return [x.k, "· " + x.label]; })).concat([["", "Todos com similar"]]) : null;
     fs.hidden = !opts;
     if (opts) {
       if (!opts.some(function (o) { return o[0] === ST.sit; })) ST.sit = "";
@@ -823,12 +813,15 @@
     fm.value = ST.mk;
     var tab = TABS.filter(function (t) { return t.k === ST.tab; })[0] || TABS[0];
     var fx = BANDS.filter(function (b) { return ST.bands[b.k]; }).map(function (b) { return b.label; });
-    var sitLbl = ST.sit === "prot" ? "não bloquear" : ST.sit === "livre" ? "podem ser bloqueados" : ST.sit ? SIT[ST.sit].label.toLowerCase() : "";
-    $("tblSub").textContent = tab.sub + " · " + scopeName(ST.scope) + (fx.length < BANDS.length ? " · faixa " + (fx.length ? fx.join(", ") : "nenhuma") : "") +
+    var sitLbl = ST.sit === "prot" ? "" : ST.sit === "livre" ? "podem ser bloqueados" : ST.sit ? SIT[ST.sit].label.toLowerCase() : "";
+    $("tabs").hidden = true; $("fTipo").hidden = true; ST.tipo = "";
+    if (!ST.ncm) $("fNcm").hidden = true;
+    if (!ST.mk) $("fMk").hidden = true;
+    $("tblSub").textContent = (ST.sit === "prot" || SIT[ST.sit] && SIT[ST.sit].grp === "keep" ? "Têm saldo, previsão de chegada ou ponto de pedido em alguma filial: não bloqueie. Quando o similar deles está livre, ele aparece na lista Bloquear" : "Produtos com similar") + " · " + scopeName(ST.scope) + (fx.length < BANDS.length ? " · faixa " + (fx.length ? fx.join(", ") : "nenhuma") : "") +
       (sitLbl && ST.tab === "prod" ? " · " + sitLbl : "") +
       (temNcm() && ST.ncm ? " · " + NCM_FILTRO[ST.ncm] : "") +
       (MK.on && ST.mk ? " · " + { nao: "ainda não marcados", sim: "marcados como bloqueados", conf: "marcados antes da medição e ainda ativos" }[ST.mk] : "") +
-      ". Clique num produto para ver todos os similares" + (MK.on && !MK.readonly ? "; marque a caixa quando bloquear no Protheus." : ".");
+      ". Clique num produto para ver todos os similares.";
   }
 
   // ---------- tabela de NCM (descrições) ----------
@@ -881,9 +874,8 @@
     return null;
   }
   function goNcm(v) {
-    ST.tab = "prod"; store("tab", "prod"); ST.sit = ""; setMk(""); ST.ncm = v;
-    ST.bands = allBands(); ST.page = 0; ST.expanded = null;
-    refreshFilters(true);
+    goNb("", null);
+    ST.ncm = v; renderTabs(); renderTable();
   }
   function renderNcmNote() {
     var box = $("ncmNote"); if (!box) return;
@@ -998,11 +990,259 @@
     return h("div", { cls: "act" }, [h("span", { cls: "apill choose", text: "Escolher qual manter" }), h("span", { cls: "p-meta", text: sub2 })]);
   }
 
+  // ================= Lista "Bloquear" =================
+  // Tela principal: cada produto que deve sair aparece UMA vez, com o produto que fica ao lado.
+  // A decisão é a mesma da coluna "O que fazer" (acaoBase): similar em uso fica; se os dois estão livres,
+  // fica o de compra mais recente (senão o código mais antigo).
+  var VIEWS = [
+    { k: "bloq", label: "Bloquear" },
+    { k: "res", label: "Resumo" },
+    { k: "nb", label: "Não bloquear" }
+  ];
+  function decisao(i) {
+    var I = ST.cur.R.info;
+    if (mkOf(i)) return { tipo: "feito" };
+    if (I.prot[i]) return { tipo: "protegido" };
+    var nbs = neighbors(i), open = nbs.filter(function (x) { return !mkOf(x[0]); });
+    if (!open.length) return { tipo: "manter" };
+    for (var k = 0; k < open.length; k++) if (I.prot[open[k][0]]) return { tipo: "bloquear", keep: open[k][0], emUso: true, sc: open[k][1] };
+    var other = open[0][0];
+    if (keepChoice(i, other) === i) return { tipo: "manter" };
+    return { tipo: "bloquear", keep: other, emUso: false, sc: open[0][1] };
+  }
+  // Todos os itens da empresa atual: {pend: [...], feitos: [...]}
+  function filaDados() {
+    var P = ST.cur.D.P, emp = ST.scope.slice(2), pend = [], feitos = [], I = ST.cur.R.info;
+    for (var i = 0; i < P.length; i++) {
+      if (P[i][0] !== emp) continue;
+      var d = decisao(i);
+      if (d.tipo === "bloquear") pend.push({ i: i, keep: d.keep, emUso: d.emUso, sc: d.sc, band: bandOf(d.sc) || "b80" });
+      else if (d.tipo === "feito") feitos.push({ i: i, keep: I.bestP[i], emUso: I.bestP[i] >= 0 && !!I.prot[I.bestP[i]], sc: I.best[i], band: bandOf(I.best[i]) || "b80", feito: true });
+    }
+    var ord = function (a, b) { return (b.emUso - a.emUso) || (b.sc - a.sc) || (P[a.i][1] < P[b.i][1] ? -1 : 1); };
+    pend.sort(ord);
+    feitos.sort(function (a, b) { return mkWhen(mkOf(b.i)) < mkWhen(mkOf(a.i)) ? -1 : 1; });
+    return { pend: pend, feitos: feitos };
+  }
+  function filaFiltrada(F) {
+    var P = ST.cur.D.P, base = ST.fb === "feito" ? F.feitos : F.pend.filter(function (x) { return x.band === ST.fb; });
+    var q = ST.fq, g = ST.fg;
+    return base.filter(function (x) {
+      if (g && grupoCod(x.i) !== g) return false;
+      if (!q) return true;
+      var a = P[x.i], b = x.keep >= 0 ? P[x.keep] : null;
+      return a[1].indexOf(q) >= 0 || a[2].indexOf(q) >= 0 || (b && (b[1].indexOf(q) >= 0 || b[2].indexOf(q) >= 0));
+    });
+  }
+  function setView(v) {
+    ST.view = v; store("view", v);
+    renderViews();
+    if (v === "res") { renderKpis(); renderProg(); renderMatrix(); renderCharts(); renderHist(); }
+    if (v === "nb") { renderTabs(); renderTable(); }
+    if (v === "bloq") renderFila();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  function renderViews() {
+    var nav = $("views"); if (!nav || !ST.cur) return;
+    nav.textContent = "";
+    var A = aggFor(ST.cur.R.summary, ST.scope) || {}, nb = (A.S || 0) + (A.P || 0) + (A.R || 0);
+    VIEWS.forEach(function (v) {
+      nav.appendChild(h("button", { cls: "vtab", type: "button", role: "tab", "aria-selected": String(ST.view === v.k), onclick: function () { if (ST.view !== v.k) setView(v.k); } },
+        [v.label, v.k === "nb" ? h("span", { cls: "cnt", text: n(nb) }) : null]));
+    });
+    VIEWS.forEach(function (v) { var el = $("v-" + v.k); if (el) el.hidden = ST.view !== v.k; });
+  }
+  function goFila(chip) {
+    if (chip) ST.fb = chip;
+    ST.fpage = 0; ST.fexp = null;
+    setView("bloq");
+  }
+  function goNb(sit, bk, mk) {
+    ST.tab = "prod"; store("tab", "prod"); ST.sit = sit == null ? "prot" : sit;
+    ST.bands = bk ? onlyOf(bk) : allBands(); setMk(mk || ""); ST.ncm = ""; ST.page = 0; ST.expanded = null;
+    setView("nb");
+  }
+
+  function renderFila() {
+    var box = $("fila"); if (!box || !ST.cur) return;
+    var F = filaDados(), P = ST.cur.D.P, emp = ST.scope.slice(2);
+    var cnt = { b95: 0, b80: 0 };
+    F.pend.forEach(function (x) { cnt[x.band]++; });
+    // andamento
+    var pr = $("fProg"); pr.textContent = "";
+    if (MK.on) {
+      var R = progFor(emp), feitos = F.feitos.length, falta = F.pend.length, tot = feitos + falta, pc = tot ? 100 * feitos / tot : 0;
+      pr.appendChild(h("div", { cls: "fp-num" }, [h("b", { cls: "num", text: n(feitos) }), h("span", { text: feitos === 1 ? "bloqueado" : "bloqueados" })]));
+      pr.appendChild(h("div", { cls: "fp-bar" }, [
+        h("div", { cls: "pbar", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(pc)), "aria-label": "Bloqueados da lista" },
+          [h("i", { style: "width:" + (feitos ? "max(4px, " + pc + "%)" : "0") })]),
+        h("span", { cls: "fp-cap", text: tot ? (feitos && pc < 0.1 ? "menos de 0,1%" : pct(feitos, tot)) + " da lista da empresa " + emp : "" })]));
+      pr.appendChild(h("div", { cls: "fp-num" }, [h("b", { cls: "num", text: n(falta) }), h("span", { text: "faltam" })]));
+      pr.appendChild(h("div", { cls: "fp-num" + (R.hoje ? " good" : "") }, [h("b", { cls: "num", text: n(R.hoje) }), h("span", { text: "hoje" })]));
+      var acts = h("div", { cls: "fp-acts" });
+      MarkStore.extra(R).forEach(function (b) { acts.appendChild(b); });
+      acts.appendChild(h("span", { cls: "savestate", id: "saveState", role: "status", "aria-live": "polite" }));
+      pr.appendChild(acts);
+      pr.hidden = false;
+      renderSaveState();
+    } else pr.hidden = true;
+    // faixas
+    var fb = $("fBand"); fb.textContent = "";
+    function chip(k, label, v) {
+      fb.appendChild(h("button", { cls: "fchip", type: "button", "aria-pressed": String(ST.fb === k), onclick: function () { if (ST.fb === k) return; ST.fb = k; ST.fg = ""; ST.fpage = 0; ST.fexp = null; renderFila(); } },
+        [label, h("span", { cls: "cnt", text: n(v) })]));
+    }
+    chip("b95", "95–100%", cnt.b95);
+    chip("b80", "80–94%", cnt.b80);
+    if (MK.on) chip("feito", "Já marquei", F.feitos.length);
+    // grupos (da faixa escolhida)
+    var base = ST.fb === "feito" ? F.feitos : F.pend.filter(function (x) { return x.band === ST.fb; });
+    var gc = {};
+    base.forEach(function (x) { var g = grupoCod(x.i); if (g) gc[g] = (gc[g] || 0) + 1; });
+    var fg = $("fGrupo"); fg.textContent = "";
+    fg.appendChild(h("option", { value: "", text: "Todos os grupos" }));
+    Object.keys(gc).sort().forEach(function (g) {
+      var d = grupoDesc(emp, g);
+      fg.appendChild(h("option", { value: g, text: g + (d ? " – " + d : "") + " (" + n(gc[g]) + ")" }));
+    });
+    if (ST.fg && !gc[ST.fg]) ST.fg = "";
+    fg.value = ST.fg;
+    // lista
+    var list = filaFiltrada(F);
+    var pages = Math.max(1, Math.ceil(list.length / PAGE));
+    if (ST.fpage >= pages) ST.fpage = pages - 1;
+    var slice = list.slice(ST.fpage * PAGE, ST.fpage * PAGE + PAGE);
+    var ae = document.activeElement, aePos = null;
+    if (ae && box.contains(ae) && ae.type === "checkbox") aePos = Array.prototype.indexOf.call(box.querySelectorAll(".frow input[type=checkbox]"), ae);
+    box.textContent = "";
+    var sec = null;
+    slice.forEach(function (x, pos) {
+      var s = ST.fb === "feito" ? "feito" : x.emUso ? "uso" : "livre";
+      if (s !== sec) {
+        sec = s;
+        var nSec = list.filter(function (y) { return (ST.fb === "feito" ? "feito" : y.emUso ? "uso" : "livre") === s; }).length;
+        box.appendChild(h("div", { cls: "fsec" }, [
+          h("span", { text: s === "uso" ? "Mais seguros: o produto que fica está em uso" : s === "livre" ? "Nenhum dos dois em uso: fica o de compra mais recente" : "Marcados como bloqueados — desmarque se marcou por engano" }),
+          h("span", { cls: "num", text: n(nSec) })]));
+      }
+      box.appendChild(filaLinha(x, pos));
+      if (ST.fexp === x.i) box.appendChild(filaDetalhe(x));
+    });
+    if (!slice.length) {
+      var vazio = ST.fq || ST.fg ? "Nenhum produto com estes filtros."
+        : ST.fb === "feito" ? "Você ainda não marcou nenhum produto nesta empresa."
+        : "Nada para bloquear nesta faixa. " + (ST.fb === "b95" && cnt.b80 ? "Veja a faixa 80–94%." : "");
+      box.appendChild(h("div", { cls: "fvazio", text: vazio }));
+    }
+    var pg = $("fPager"); pg.textContent = "";
+    pg.appendChild(h("span", { cls: "num", text: list.length ? (n(ST.fpage * PAGE + 1) + "–" + n(Math.min(list.length, (ST.fpage + 1) * PAGE)) + " de " + n(list.length)) : "" }));
+    if (pages > 1) pg.appendChild(h("div", { cls: "actions" }, [
+      h("button", { cls: "btn small", type: "button", disabled: ST.fpage === 0, text: "← Anterior", onclick: function () { ST.fpage--; ST.fexp = null; renderFila(); $("v-bloq").scrollIntoView({ block: "start" }); } }),
+      h("button", { cls: "btn small", type: "button", disabled: ST.fpage >= pages - 1, text: "Próxima →", onclick: function () { ST.fpage++; ST.fexp = null; renderFila(); $("v-bloq").scrollIntoView({ block: "start" }); } })]));
+    // foco: depois de marcar, a próxima linha fica no lugar da que saiu
+    var alvo = ST.ffocus != null ? ST.ffocus : aePos;
+    if (alvo != null && alvo >= 0) {
+      var boxes = box.querySelectorAll(".frow input[type=checkbox]"), el = boxes[Math.min(alvo, boxes.length - 1)];
+      if (el) el.focus({ preventScroll: true });
+    }
+    ST.ffocus = null;
+  }
+  function compraTxt(i) {
+    var u = ST.cur.D.P[i][6];
+    return u ? "última compra " + u.slice(8, 10) + "/" + u.slice(5, 7) + "/" + u.slice(0, 4) : "nunca comprado";
+  }
+  function usoTxt(i) {
+    var I = ST.cur.R.info, t = [];
+    if (I.saldo[i] !== 0) t.push("saldo " + QF.format(I.saldo[i]));
+    if (I.prev[i] > 0) t.push("previsão " + QF.format(I.prev[i]));
+    if (I.pp[i] > 0) t.push("ponto de pedido " + QF.format(I.pp[i]));
+    return t.join(" · ");
+  }
+  function filaLado(i, papel, extra, cls) {
+    var p = ST.cur.D.P[i], gt = grupoTexto(i), nc = temNcm() ? p[9] : "";
+    var sub = [gt, nc ? "NCM " + nc : ""].filter(Boolean).join(" · ");
+    return h("div", { cls: "fside " + papel }, [
+      h("small", { text: papel === "b" ? "Bloquear" : papel === "k" ? "Manter" : "Bloqueado" }),
+      h("div", { cls: "fname" }, [h("span", { cls: "p-cod", text: p[1] }), h("span", { cls: "p-desc", text: p[2] })]),
+      sub ? h("div", { cls: "fsub", title: grupoTitulo(i) + (nc && ncmDesc(nc) ? " · NCM " + nc + " " + ncmDesc(nc) : ""), text: sub }) : null,
+      extra ? h("div", { cls: cls || "fsub", text: extra }) : null]);
+  }
+  function filaLinha(x, pos) {
+    var P = ST.cur.D.P, i = x.i, k = x.keep, aberto = ST.fexp === i, avisos = [];
+    if (k >= 0 && temNcm() && P[i][9] && P[k][9] && P[i][9] !== P[k][9])
+      avisos.push(["NCM diferente: " + P[i][9] + " × " + P[k][9], "NCM do que sai: " + P[i][9] + (ncmDesc(P[i][9]) ? " " + ncmDesc(P[i][9]) : "") + " · NCM do que fica: " + P[k][9] + (ncmDesc(P[k][9]) ? " " + ncmDesc(P[k][9]) : "") + ". Confira qual está certo antes de bloquear: o código que fica leva o NCM dele."]);
+    var gi = grupoCod(i), gk = k >= 0 ? grupoCod(k) : "";
+    if (gi && gk && gi !== gk) avisos.push(["Grupo diferente: " + gi + " × " + gk, "Grupo do que sai: " + grupoTexto(i) + " · grupo do que fica: " + grupoTexto(k) + "."]);
+    if (x.feito && k >= 0 && mkOf(k)) avisos.push(["O similar " + P[k][1] + " também foi marcado", "Confira se um deles fica ativo no Protheus."]);
+    if (x.feito && ST.cur.R.info.prot[i]) avisos.push(["Tem saldo, previsão ou ponto de pedido", "Este produto está em uso; confira antes de bloquear."]);
+    var cb = h("label", { cls: "fck", title: x.feito ? "Desmarcar" : "Marque depois de bloquear no Protheus", onclick: function (ev) { ev.stopPropagation(); } }, [
+      (function () {
+        var inp = h("input", { type: "checkbox", disabled: MK.readonly || !MK.on, "aria-label": (x.feito ? "Desmarcar " : "Bloqueei ") + P[i][1] + " " + P[i][2] });
+        inp.checked = !!x.feito;
+        inp.addEventListener("change", function () { ST.ffocus = pos; if (ST.fexp === i) ST.fexp = null; setMarks([i], inp.checked); });
+        return inp;
+      })(),
+      h("span", { cls: "box", "aria-hidden": "true" }),
+      h("span", { cls: "fck-l", text: x.feito ? "Bloqueado" : "Bloqueei" })]);
+    var esq = filaLado(i, x.feito ? "f" : "b", x.feito ? "marcado em " + dt(mkWhen(mkOf(i)), true) : x.emUso ? null : compraTxt(i));
+    var dir = k >= 0 ? filaLado(k, "k", x.emUso ? "em uso: " + usoTxt(k) : compraTxt(k), "fwhy") : h("div");
+    var row = h("div", { cls: "frow" + (aberto ? " open" : "") + (x.feito ? " done" : ""), tabindex: "0", "aria-expanded": String(aberto),
+      title: "Clique para ver todos os similares",
+      onclick: function () { ST.fexp = aberto ? null : i; renderFila(); },
+      onkeydown: function (ev) { if (ev.target !== ev.currentTarget) return; if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ST.fexp = aberto ? null : i; renderFila(); } } },
+      [MK.on ? cb : h("div"), esq, h("div", { cls: "farrow", "aria-hidden": "true", text: "→" }), dir, h("div", { cls: "fpct " + x.band, text: x.sc + "%" }),
+        avisos.length ? h("div", { cls: "favisos" }, avisos.map(function (a) { return h("span", { cls: "faviso", title: a[1], text: "⚠ " + a[0] }); })) : null]);
+    return row;
+  }
+  function filaDetalhe(x) {
+    var P = ST.cur.D.P, i = x.i, all = neighbors(i), nbs = all.slice(0, 40), mkOn = MK.on;
+    var sims = h("div", { cls: "sims" }, nbs.map(function (y) {
+      var dn = mkOn && !!mkOf(y[0]);
+      return h("div", { cls: "s" + (mkOn ? " with-mk" : "") + (dn ? " is-done" : "") }, (mkOn ? [h("div", null, [mkBox(y[0])])] : []).concat([
+        h("div", null, [scorePill(y[1])]),
+        h("div", null, [prodCell(y[0], false), statusTags(y[0], true), y[0] === x.keep ? h("span", { cls: "p-meta keep-tag", text: "← sugestão: este fica" }) : null,
+          dn ? h("span", { cls: "p-meta mk-ok", text: "Marcado como bloqueado em " + dt(mkWhen(mkOf(y[0])), true) }) : null])]));
+    }));
+    var kids = [h("div", { cls: "eyebrow", style: "margin-bottom:8px", text: "Similares de " + P[i][1] + " · " + P[i][2] })];
+    if (!x.feito && !x.emUso && x.keep >= 0)
+      kids.push(h("p", { cls: "note", style: "margin:0 0 10px", text: "Prefere manter o " + P[i][1] + "? Bloqueie o " + P[x.keep][1] + " no Protheus e marque a caixa dele aqui embaixo — a lista se ajusta sozinha." }));
+    kids.push(sims);
+    if (all.length > 40) kids.push(h("p", { cls: "note", text: "Mostrando os 40 mais parecidos de " + n(all.length) + "." }));
+    return h("div", { cls: "fdet" }, kids);
+  }
+  // Excel da lista de bloqueio (o que está na tela: faixa, grupo e busca)
+  async function exportFila() {
+    if (!ST.cur) return;
+    var btn = $("btnFilaXls"), label = btn.innerHTML;
+    btn.disabled = true; btn.textContent = "Gerando…";
+    try {
+      var P = ST.cur.D.P, list = filaFiltrada(filaDados()), I = ST.cur.R.info;
+      var headers = ["Empresa", "Bloquear: código", "Bloquear: descrição", "Grupo", "Descrição do grupo", "NCM", "Última compra",
+        "Manter: código", "Manter: descrição", "Grupo (manter)", "NCM (manter)", "Por que manter", "Semelhança %", "Avisos", "Bloqueado no app", "Marcado em"];
+      var rows = list.map(function (x) {
+        var i = x.i, k = x.keep, av = [];
+        if (k >= 0 && P[i][9] && P[k][9] && P[i][9] !== P[k][9]) av.push("NCM diferente");
+        if (k >= 0 && grupoCod(i) && grupoCod(k) && grupoCod(i) !== grupoCod(k)) av.push("Grupo diferente");
+        var e = mkOf(i);
+        return [P[i][0], P[i][1], P[i][2], grupoCod(i), grupoTexto(i, false), P[i][9] || "", P[i][6] || "",
+          k >= 0 ? P[k][1] : "", k >= 0 ? P[k][2] : "", k >= 0 ? grupoTexto(k) : "", k >= 0 ? (P[k][9] || "") : "",
+          k < 0 ? "" : I.prot[k] ? "Em uso: " + usoTxt(k) : compraTxt(k), x.sc, av.join(" · "), e ? "Sim" : "Não", e ? dt(mkWhen(e), true) : ""];
+      });
+      var nome = { b95: "95-100", b80: "80-94", feito: "ja_marcados" }[ST.fb] || "lista";
+      var blob = await XlsxWriter.build({ sheet: "Bloquear", headers: headers, rows: rows });
+      await salvarArquivo("bloquear_" + nome + "_empresa" + ST.scope.slice(2) + "_" + ST.cur.D.at.slice(0, 10) + ".xlsx", blob);
+      btn.innerHTML = label;
+    } catch (e) {
+      btn.textContent = "Não consegui gerar";
+      setTimeout(function () { btn.innerHTML = label; }, 2500);
+    } finally { btn.disabled = false; }
+  }
+
   function renderTable() {
     var tbl = $("tbl"), ae = document.activeElement;
     var keepFocus = MK.refocus || (ae && tbl.contains(ae) && ae.getAttribute("data-mk")) || null;
     tbl.textContent = "";
-    var list = currentList(), I = ST.cur.R.info, P = ST.cur.D.P, mkOn = MK.on;
+    var list = currentList(), I = ST.cur.R.info, P = ST.cur.D.P, mkOn = MK.on && ST.view !== "nb";
     var pages = Math.max(1, Math.ceil(list.length / PAGE));
     if (ST.page >= pages) ST.page = pages - 1;
     var slice = list.slice(ST.page * PAGE, ST.page * PAGE + PAGE);
