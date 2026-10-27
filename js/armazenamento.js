@@ -113,7 +113,8 @@ var Armazem = (function () {
 // ===== Marcações de bloqueio =====
 // No repositório: dados/bloqueios.json — todo mundo que abre o site vê.
 // Quem marca conecta uma chave do GitHub (uma vez, neste navegador): cada marcação é gravada sozinha
-// no repositório pela API do GitHub e aparece para os outros em 1 a 2 minutos (o site busca de novo a cada minuto).
+// no repositório pela API do GitHub. Quem está conectado vê as marcações dos outros em até 20 s (pela API);
+// sem chave, o site busca a cada 30 s no GitHub Pages, que leva 1 a 2 minutos para publicar.
 // Sem chave, a marcação fica só neste navegador (localStorage) até ser enviada pelo PUBLICAR.
 // Cada marcação: { on, d: quando marcou, t: última alteração }. Na junção vale a de "t" mais recente.
 var Marcas = (function () {
@@ -162,50 +163,76 @@ var Marcas = (function () {
     for (var i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
     return new TextDecoder().decode(b);
   }
-  function erroHttp(r, txt) { var e = new Error(txt || ("GitHub respondeu " + r.status)); e.status = r.status; return e; }
+  // pedido com tempo limite: se a rede travar, desiste em 20 s e tenta de novo depois
+  function buscar(url, op) {
+    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null, t = ctl ? setTimeout(function () { ctl.abort(); }, 20000) : 0;
+    return fetch(url, Object.assign({ cache: "no-store" }, op || {}, ctl ? { signal: ctl.signal } : {})).finally(function () { clearTimeout(t); });
+  }
+  // 403/429 por excesso de pedidos é temporário (o GitHub pede para esperar); 401 e o resto de 403 são da chave
+  async function erroHttp(r, txt) {
+    var e = new Error(txt || ("GitHub respondeu " + r.status)); e.status = r.status;
+    if (r.status === 429 || (r.status === 403 && r.headers && r.headers.get("x-ratelimit-remaining") === "0")) e.espera = true;
+    else if (r.status === 403) { try { var j = await r.clone().json(); if (/rate limit|abuse/i.test(j.message || "")) e.espera = true; } catch (x) { /* sem corpo */ } }
+    return e;
+  }
   // Lê dados/bloqueios.json pela API (sempre a versão mais nova, com o "sha" para gravar por cima)
   async function lerApi(c) {
-    var r = await fetch(urlArq(c) + "?ref=" + encodeURIComponent(c.branch) + "&t=" + Date.now(), { headers: cab(c), cache: "no-store" });
+    var r = await buscar(urlArq(c) + "?ref=" + encodeURIComponent(c.branch) + "&t=" + Date.now(), { headers: cab(c) });
     if (r.status === 404) return { sha: null, m: {} };
-    if (!r.ok) throw erroHttp(r);
+    if (!r.ok) throw await erroHttp(r);
     var j = await r.json(), texto = j.content && j.encoding === "base64" ? textoDeB64(j.content) : null;
     if (texto == null) { // arquivo maior que 1 MB: a API manda o conteúdo à parte
-      var r2 = await fetch(urlArq(c) + "?ref=" + encodeURIComponent(c.branch) + "&t=" + Date.now(), { headers: cab(c, true), cache: "no-store" });
-      if (!r2.ok) throw erroHttp(r2);
+      var r2 = await buscar(urlArq(c) + "?ref=" + encodeURIComponent(c.branch) + "&t=" + Date.now(), { headers: cab(c, true) });
+      if (!r2.ok) throw await erroHttp(r2);
       texto = await r2.text();
     }
     var obj = {}; try { obj = JSON.parse(texto.replace(/^﻿/, "")); } catch (e) { obj = {}; }
     return { sha: j.sha, m: (obj && obj.m) || {} };
   }
   async function lerSite() {
-    var r = await fetch(ARQ, { cache: "no-store" });
+    var r = await buscar(ARQ + "?t=" + Date.now());
     if (!r.ok) return r.status === 404 ? {} : null;
     var j = await r.json();
     return (j && j.m) || {};
   }
   // Busca as marcações de todos (a cada minuto e quando a página volta a ficar visível)
+  var aoNovos = null, atualizando = false;
   async function atualizar() {
+    if (atualizando) return;
+    atualizando = true;
     var c = conexao(), m = null;
     try { m = c ? (await lerApi(c)).m : await lerSite(); }
-    catch (e) { if (c && (e.status === 401 || e.status === 403)) { est.fase = "chave"; est.erro = "a chave do GitHub não vale mais"; mudouEstado(); } }
+    catch (e) { if (c && !e.espera && (e.status === 401 || e.status === 403)) { est.fase = "chave"; est.erro = "a chave do GitHub não vale mais"; mudouEstado(); } }
+    finally { atualizando = false; }
     if (!m) return;
     var sig = JSON.stringify(m);
     est.lidoEm = new Date();
-    if (sig !== assinatura) { assinatura = sig; repo = m; podar(); avisar(); }
+    if (sig !== assinatura) {
+      var novos = 0, k;
+      for (k in m) { var a = m[k], b = repo[k]; if (a && a.on && (!b || !b.on) && !(local[k] && local[k].t >= a.t)) novos++; }
+      var primeira = !assinatura;
+      assinatura = sig; repo = m; podar(); avisar();
+      // o envio que parecia ter falhado chegou ao GitHub (ex.: a rede caiu depois de gravar)
+      if (est.fase === "erro" && !Object.keys(local).length) { est.fase = "ok"; est.erro = ""; est.enviadoEm = new Date(); clearTimeout(tRetry); }
+      if (novos && !primeira && aoNovos) aoNovos(novos);
+    }
     mudouEstado();
   }
 
-  // ---- envio (em lote: 4 s depois da última marcação, no máximo 30 s depois da primeira) ----
+  // ---- envio (em lote: 2 s depois da última marcação, no máximo 15 s depois da primeira) ----
   function agendar() {
     if (!conexao() || !Object.keys(local).length) return;
     var agora = Date.now();
     if (!primeiroPend) primeiroPend = agora;
     clearTimeout(tEnvio);
-    tEnvio = setTimeout(enviar, Math.max(0, Math.min(4000, primeiroPend + 30000 - agora)));
+    tEnvio = setTimeout(enviar, Math.max(0, Math.min(2000, primeiroPend + 15000 - agora)));
   }
   async function enviar() {
     var c = conexao();
-    if (!c || !Object.keys(local).length) return;
+    if (!c || !Object.keys(local).length) {
+      if (c && est.fase === "erro") { est.fase = "ok"; est.erro = ""; est.enviadoEm = new Date(); mudouEstado(); }
+      return;
+    }
     if (enviando) { deNovo = true; return; }
     enviando = true; deNovo = false; primeiroPend = 0; clearTimeout(tRetry);
     est.fase = "enviando"; est.erro = ""; mudouEstado();
@@ -218,7 +245,7 @@ var Marcas = (function () {
         var corpo = { message: "Marcações de bloqueio: " + novos + (novos === 1 ? " produto" : " produtos") + (c.nome ? " (" + c.nome + ")" : ""),
           content: b64DeTexto(JSON.stringify({ v: 1, at: new Date().toISOString(), m: junto })), branch: c.branch };
         if (lido.sha) corpo.sha = lido.sha;
-        var r = await fetch(urlArq(c), { method: "PUT", headers: Object.assign(cab(c), { "Content-Type": "application/json" }), body: JSON.stringify(corpo), cache: "no-store" });
+        var r = await buscar(urlArq(c), { method: "PUT", headers: Object.assign(cab(c), { "Content-Type": "application/json" }), body: JSON.stringify(corpo) });
         if (r.ok) {
           repo = junto;
           for (k in mandados) if (local[k] === mandados[k]) delete local[k];
@@ -226,22 +253,22 @@ var Marcas = (function () {
           break;
         }
         if ((r.status === 409 || r.status === 422) && tent < 4) { await new Promise(function (ok) { setTimeout(ok, 600 + Math.random() * 900); }); continue; } // outra pessoa gravou ao mesmo tempo
-        throw erroHttp(r);
+        throw await erroHttp(r);
       }
       assinatura = JSON.stringify(repo);
       est.fase = "ok"; est.enviadoEm = new Date();
       avisar();
     } catch (e) {
-      if (e.status === 401 || e.status === 403 || e.status === 404) { est.fase = "chave"; est.erro = e.status === 404 ? "o repositório não foi encontrado com esta chave" : "a chave do GitHub não vale mais ou não pode gravar"; }
-      else { est.fase = "erro"; est.erro = "sem conexão com o GitHub"; tRetry = setTimeout(enviar, 30000); }
+      if (!e.espera && (e.status === 401 || e.status === 403 || e.status === 404)) { est.fase = "chave"; est.erro = e.status === 404 ? "o repositório não foi encontrado com esta chave" : "a chave do GitHub não vale mais ou não pode gravar"; }
+      else { est.fase = "erro"; est.erro = e.espera ? "o GitHub pediu para esperar um pouco" : "sem conexão com o GitHub"; tRetry = setTimeout(enviar, e.espera ? 60000 : 20000); }
     } finally {
       enviando = false; mudouEstado();
       if (deNovo || (est.fase === "ok" && Object.keys(local).length)) agendar();
     }
   }
 
-  async function iniciar(fn, fnEstado) {
-    ouvinte = fn; aoEstado = fnEstado || null; local = lerLocal();
+  async function iniciar(fn, fnEstado, fnNovos) {
+    ouvinte = fn; aoEstado = fnEstado || null; aoNovos = fnNovos || null; local = lerLocal();
     var c = conexao(), m = null;
     try { m = c ? (await lerApi(c)).m : await lerSite(); } catch (e) { m = null; }
     if (!m) { try { m = await lerSite(); } catch (e) { m = null; } }
@@ -249,7 +276,7 @@ var Marcas = (function () {
     podar();
     fn(juntar());
     mudouEstado();
-    setInterval(atualizar, 60000);
+    (function ciclo() { setTimeout(function () { (document.visibilityState === "hidden" ? Promise.resolve() : atualizar()).then(ciclo, ciclo); }, conexao() ? 20000 : 30000); })();
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState === "visible") atualizar();
       else if (Object.keys(local).length && conexao()) enviar(); // fechando a aba: tenta mandar o que falta
@@ -270,20 +297,27 @@ var Marcas = (function () {
     if (!token) throw new Error("cole a chave do GitHub");
     if (!alvo.owner || !alvo.repo) throw new Error("informe o dono e o nome do repositório");
     var c = { token: token, owner: alvo.owner, repo: alvo.repo, nome: String(nome || "").trim().slice(0, 60) };
-    var r = await fetch(API + "/repos/" + encodeURIComponent(c.owner) + "/" + encodeURIComponent(c.repo), { headers: cab(c), cache: "no-store" });
+    var r = await buscar(API + "/repos/" + encodeURIComponent(c.owner) + "/" + encodeURIComponent(c.repo), { headers: cab(c) });
     if (r.status === 401) throw new Error("a chave não foi aceita pelo GitHub (confira se copiou inteira ou se não venceu)");
     if (r.status === 404 || r.status === 403) throw new Error("esta chave não tem acesso ao repositório " + c.owner + "/" + c.repo);
     if (!r.ok) throw new Error("o GitHub respondeu " + r.status + "; tente de novo");
     var j = await r.json();
     if (j.permissions && !j.permissions.push) throw new Error("esta chave só pode ler o repositório; ela precisa de Contents: Read and write");
     c.branch = j.default_branch || "main";
-    try { var u = await fetch(API + "/user", { headers: cab(c), cache: "no-store" }); if (u.ok) c.login = (await u.json()).login || ""; } catch (e) { /* só para mostrar */ }
+    try { var u = await buscar(API + "/user", { headers: cab(c) }); if (u.ok) c.login = (await u.json()).login || ""; } catch (e) { /* só para mostrar */ }
     try { localStorage.setItem(CHAVE_GH, JSON.stringify(c)); } catch (e) { throw new Error("o navegador não deixou guardar a chave"); }
     est.fase = ""; est.erro = "";
     await atualizar();
     if (Object.keys(local).length) await enviar();
     mudouEstado();
     return c;
+  }
+  // botão "Salvar para todos": manda o que falta agora e busca o que os outros marcaram
+  async function sincronizar() {
+    clearTimeout(tEnvio);
+    if (conexao() && Object.keys(local).length) await enviar();
+    await atualizar();
+    return estado();
   }
   function desconectar() { try { localStorage.removeItem(CHAVE_GH); } catch (e) { /* nada */ } est.fase = ""; est.erro = ""; mudouEstado(); }
   function estado() {
@@ -294,7 +328,7 @@ var Marcas = (function () {
   function pendentes() { return Object.keys(local).length; }
   function paraPublicar() { return { v: 1, at: new Date().toISOString(), m: juntar() }; }
   return { iniciar: iniciar, salvar: salvar, pendentes: pendentes, paraPublicar: paraPublicar, conectar: conectar, desconectar: desconectar,
-    estado: estado, atualizar: atualizar, enviar: enviar };
+    estado: estado, atualizar: atualizar, enviar: enviar, sincronizar: sincronizar };
 })();
 
 // ===== Tabela de NCM (descrição de cada código) =====

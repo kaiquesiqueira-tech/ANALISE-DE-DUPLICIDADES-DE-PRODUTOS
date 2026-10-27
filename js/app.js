@@ -818,31 +818,50 @@
 
   // ---------- marcações: navegador + dados/bloqueios.json ----------
   var MarkStore = {
-    start: function () { Marcas.iniciar(onMarks, function () { scheduleMarkRender(); }); },
+    start: function () {
+      Marcas.iniciar(onMarks, function () { scheduleMarkRender(); }, function (q) {
+        toast(q === 1 ? "1 bloqueio novo marcado em outro computador." : n(q) + " bloqueios novos marcados em outros computadores.");
+      });
+    },
     save: function (items) { return Marcas.salvar(items); },
     hint: function () { return ""; },
     savedText: "Salvo",
-    note: "marque na lista os produtos que você bloqueou no Protheus. Com o GitHub conectado neste navegador, cada marcação vai sozinha para o repositório e aparece para todos em 1 a 2 minutos.",
+    note: "marque na lista os produtos que você bloqueou no Protheus. Com o GitHub conectado, cada marcação é salva para todos sozinha em poucos segundos.",
     why: function (e) { return e && e.message ? " (" + e.message + ")" : ""; },
     // texto do indicador "salvo" (substitui o padrão)
     estado: function () {
       var e = Marcas.estado(), hm = function (d) { return d ? d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : ""; };
       if (e.conectado) {
         if (e.fase === "chave") return { cls: "err", text: "Não salvou para todos: " + e.erro };
-        if (e.fase === "erro") return { cls: "err", text: "Sem conexão com o GitHub — tento de novo em 30 s" };
+        if (e.fase === "erro") return { cls: "err", text: "Ainda não salvou (" + e.erro + ") — tento de novo sozinho" };
         if (e.fase === "enviando" || e.pendentes) return { cls: "busy", text: "Salvando para todos…" };
-        if (e.enviadoEm) return { cls: "ok", text: "Salvo para todos às " + hm(e.enviadoEm) };
-        return { cls: "ok", text: "Conectado: o que você marcar aparece para todos" };
+        if (e.enviadoEm) return { cls: "ok", text: "✓ Salvo para todos às " + hm(e.enviadoEm) + (e.lidoEm ? " · atualizado às " + hm(e.lidoEm) : "") };
+        return { cls: "ok", text: "✓ Conectado · marcações de todos atualizadas às " + hm(e.lidoEm) };
       }
-      if (e.pendentes) return { cls: "err", text: (e.pendentes === 1 ? "1 marcação" : n(e.pendentes) + " marcações") + " só neste navegador" };
+      if (e.pendentes) return { cls: "err", text: (e.pendentes === 1 ? "1 marcação" : n(e.pendentes) + " marcações") + " só neste computador — clique em Salvar para todos" };
       return { cls: "ok", text: "Marcações de todos · atualizado às " + hm(e.lidoEm) };
     },
     extra: function () {
       var e = Marcas.estado(), out = [];
-      if (!e.conectado) out.push(h("button", { cls: "btn small" + (e.pendentes ? " primary" : ""), type: "button", title: "Conectar o GitHub para que as marcações apareçam para todos",
-        text: "Salvar para todos" + (e.pendentes ? " (" + n(e.pendentes) + ")" : ""), onclick: abrirConexao }));
-      else if (e.fase === "chave") out.push(h("button", { cls: "btn small primary", type: "button", text: "Conectar de novo", onclick: abrirConexao }));
-      else out.push(h("button", { cls: "btn small", type: "button", title: "Conexão com o GitHub", text: "GitHub" + (e.login ? ": " + e.login : ""), onclick: abrirConexao }));
+      if (e.conectado && e.fase !== "chave") {
+        var bs = h("button", { cls: "btn small" + (e.pendentes ? " primary" : ""), type: "button", title: "Grava agora no GitHub o que falta e busca o que os outros marcaram",
+          text: e.pendentes ? "Salvar para todos agora (" + n(e.pendentes) + ")" : "Salvar para todos" });
+        bs.addEventListener("click", async function () {
+          bs.disabled = true; bs.textContent = "Salvando…";
+          var st = await Marcas.sincronizar();
+          var hm = (st.lidoEm || new Date()).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+          toast(st.pendentes ? "Ainda não salvou: " + (st.erro || "tente de novo") + "." : "Tudo salvo para todos. Lista atualizada às " + hm + ".");
+          scheduleMarkRender();
+        });
+        out.push(bs);
+      } else if (!e.conectado) {
+        out.push(h("button", { cls: "btn small" + (e.pendentes ? " primary" : ""), type: "button", title: "Conectar o GitHub para que as marcações sejam salvas para todos",
+          text: "Salvar para todos" + (e.pendentes ? " (" + n(e.pendentes) + ")" : ""), onclick: abrirConexao }));
+        var ba = h("button", { cls: "btn small", type: "button", title: "Buscar agora as marcações de todos", text: "↻ Atualizar" });
+        ba.addEventListener("click", async function () { ba.disabled = true; await Marcas.atualizar(); toast("Lista atualizada às " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) + "."); scheduleMarkRender(); });
+        out.push(ba);
+      } else out.push(h("button", { cls: "btn small primary", type: "button", text: "Conectar de novo", onclick: abrirConexao }));
+      if (e.conectado) out.push(h("button", { cls: "btn small", type: "button", title: "Conexão com o GitHub" + (e.login ? " (" + e.login + ")" : ""), text: "⚙ GitHub", onclick: abrirConexao }));
       if (TabelaNcm.pendente() || TabelaGrupos.pendente()) out.push(h("button", { cls: "btn small", type: "button", title: "Baixar as tabelas para enviar ao repositório",
         text: "Enviar tabelas ao GitHub", onclick: function () { openPublish(); } }));
       return out;
@@ -857,7 +876,7 @@
     var msgs = h("ul", { cls: "warnlist" });
     var aviso = function (t, ok) { msgs.textContent = ""; msgs.appendChild(h("li", { cls: ok ? "ok" : null, text: t })); };
     var kids = [h("div", { cls: "eyebrow", text: "Marcações para todos" }), h("h2", { text: "Salvar as marcações para todos" }),
-      h("p", { cls: "note", style: "font-size:13px", text: "Com a chave do GitHub conectada neste navegador, cada produto que você marcar como bloqueado é gravado no repositório do site e aparece para todos em 1 a 2 minutos. Quem só consulta não precisa conectar nada: o site busca as marcações de todos a cada minuto." })];
+      h("p", { cls: "note", style: "font-size:13px", text: "Conecte uma vez e pronto: com a chave do GitHub neste computador, cada produto que você marcar como bloqueado é salvo para todos sozinho em poucos segundos — não precisa desconectar nem clicar em nada. Quem também estiver conectado vê as marcações dos outros em até 20 segundos; quem só consulta, sem chave, vê em 1 a 2 minutos." })];
     if (e.conectado) {
       kids.push(h("div", { cls: "gh-ok" }, [h("strong", { text: e.fase === "chave" ? "A chave precisa ser trocada" : "Conectado" }),
         h("span", { text: (e.login ? "Conta " + e.login + " · " : "") + "repositório " + e.repo + (e.nome ? " · marcações em nome de " + e.nome : "") })]));

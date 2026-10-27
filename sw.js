@@ -2,7 +2,7 @@
 // Sempre busca a versão mais nova na internet; sem conexão, abre a última versão que ficou guardada
 // (telas, scripts e as medições já abertas neste computador).
 "use strict";
-const CACHE = "duplicidade-v5";
+const CACHE = "duplicidade-v6";
 const BASE = [
   "./", "index.html", "manifest.webmanifest", "css/estilo.css",
   "js/simcore.js", "js/xlsxstream.js", "js/analise.js", "js/xlsxwriter.js", "js/armazenamento.js", "js/app.js",
@@ -31,7 +31,9 @@ self.addEventListener("fetch", (ev) => {
       .then((res) => {
         if (res.ok && res.type === "basic") {
           const copia = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copia)).catch(() => {});
+          // pedidos com ?t= (buscar sempre a versão nova) ficam guardados sem o ?t=, para o cache não crescer
+          const chave = url.searchParams.has("t") ? new Request(url.origin + url.pathname) : req;
+          caches.open(CACHE).then((c) => c.put(chave, copia)).catch(() => {});
         }
         return res;
       })
