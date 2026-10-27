@@ -111,11 +111,17 @@ var Armazem = (function () {
 })();
 
 // ===== Marcações de bloqueio =====
-// 1) No repositório: dados/bloqueios.json — todo mundo que abre o site vê.
-// 2) Neste navegador (localStorage): marcações feitas aqui e ainda não enviadas ao GitHub.
+// No repositório: dados/bloqueios.json — todo mundo que abre o site vê.
+// Quem marca conecta uma chave do GitHub (uma vez, neste navegador): cada marcação é gravada sozinha
+// no repositório pela API do GitHub e aparece para os outros em 1 a 2 minutos (o site busca de novo a cada minuto).
+// Sem chave, a marcação fica só neste navegador (localStorage) até ser enviada pelo PUBLICAR.
 // Cada marcação: { on, d: quando marcou, t: última alteração }. Na junção vale a de "t" mais recente.
 var Marcas = (function () {
-  var CHAVE = "dup:marcas:v1", repo = {}, local = {}, ouvinte = null;
+  var CHAVE = "dup:marcas:v1", CHAVE_GH = "dup:github:v1", ARQ = "dados/bloqueios.json", API = "https://api.github.com";
+  var repo = {}, local = {}, ouvinte = null, aoEstado = null, assinatura = "";
+  var est = { fase: "", erro: "", enviadoEm: null, lidoEm: null };
+  var tEnvio = 0, primeiroPend = 0, enviando = false, deNovo = false, tRetry = 0;
+
   function lerLocal() { try { var j = JSON.parse(localStorage.getItem(CHAVE) || "{}"); return j && typeof j === "object" ? j : {}; } catch (e) { return {}; } }
   function gravarLocal() { try { localStorage.setItem(CHAVE, JSON.stringify(local)); return true; } catch (e) { return false; } }
   function valida(e) { return e && typeof e === "object" && typeof e.t === "string"; }
@@ -125,27 +131,170 @@ var Marcas = (function () {
     for (k in local) if (valida(local[k]) && (!m[k] || local[k].t > m[k].t)) m[k] = local[k];
     return m;
   }
-  async function iniciar(fn) {
-    ouvinte = fn; local = lerLocal();
-    try {
-      var r = await fetch("dados/bloqueios.json", { cache: "no-store" });
-      if (r.ok) { var j = await r.json(); repo = (j && j.m) || {}; }
-    } catch (e) { repo = {}; }
-    // o que já chegou ao repositório sai do navegador
+  function avisar() { if (ouvinte) ouvinte(juntar()); }
+  function mudouEstado() { if (aoEstado) aoEstado(); }
+  // o que já chegou ao repositório sai do navegador
+  function podar() {
     var mudou = false;
     Object.keys(local).forEach(function (k) { var a = repo[k]; if (!valida(local[k]) || (valida(a) && a.t >= local[k].t)) { delete local[k]; mudou = true; } });
     if (mudou) gravarLocal();
+  }
+
+  // ---- conexão com o GitHub ----
+  function conexao() { try { var c = JSON.parse(localStorage.getItem(CHAVE_GH) || "null"); return c && c.token ? c : null; } catch (e) { return null; } }
+  function repoDoSite() {
+    var m = /^([^.]+)\.github\.io$/i.exec(location.hostname);
+    if (!m) return null;
+    var seg = location.pathname.split("/").filter(Boolean)[0];
+    return { owner: m[1], repo: seg && !/\.html?$/i.test(seg) ? seg : m[1] + ".github.io" };
+  }
+  function cab(c, raw) {
+    return { "Authorization": "Bearer " + c.token, "Accept": raw ? "application/vnd.github.raw+json" : "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+  }
+  function urlArq(c) { return API + "/repos/" + encodeURIComponent(c.owner) + "/" + encodeURIComponent(c.repo) + "/contents/" + ARQ; }
+  function b64DeTexto(s) {
+    var b = new TextEncoder().encode(s), out = "", N = 0x8000;
+    for (var i = 0; i < b.length; i += N) out += String.fromCharCode.apply(null, b.subarray(i, i + N));
+    return btoa(out);
+  }
+  function textoDeB64(c) {
+    var bin = atob(String(c).replace(/\s/g, "")), b = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(b);
+  }
+  function erroHttp(r, txt) { var e = new Error(txt || ("GitHub respondeu " + r.status)); e.status = r.status; return e; }
+  // Lê dados/bloqueios.json pela API (sempre a versão mais nova, com o "sha" para gravar por cima)
+  async function lerApi(c) {
+    var r = await fetch(urlArq(c) + "?ref=" + encodeURIComponent(c.branch) + "&t=" + Date.now(), { headers: cab(c), cache: "no-store" });
+    if (r.status === 404) return { sha: null, m: {} };
+    if (!r.ok) throw erroHttp(r);
+    var j = await r.json(), texto = j.content && j.encoding === "base64" ? textoDeB64(j.content) : null;
+    if (texto == null) { // arquivo maior que 1 MB: a API manda o conteúdo à parte
+      var r2 = await fetch(urlArq(c) + "?ref=" + encodeURIComponent(c.branch) + "&t=" + Date.now(), { headers: cab(c, true), cache: "no-store" });
+      if (!r2.ok) throw erroHttp(r2);
+      texto = await r2.text();
+    }
+    var obj = {}; try { obj = JSON.parse(texto.replace(/^﻿/, "")); } catch (e) { obj = {}; }
+    return { sha: j.sha, m: (obj && obj.m) || {} };
+  }
+  async function lerSite() {
+    var r = await fetch(ARQ, { cache: "no-store" });
+    if (!r.ok) return r.status === 404 ? {} : null;
+    var j = await r.json();
+    return (j && j.m) || {};
+  }
+  // Busca as marcações de todos (a cada minuto e quando a página volta a ficar visível)
+  async function atualizar() {
+    var c = conexao(), m = null;
+    try { m = c ? (await lerApi(c)).m : await lerSite(); }
+    catch (e) { if (c && (e.status === 401 || e.status === 403)) { est.fase = "chave"; est.erro = "a chave do GitHub não vale mais"; mudouEstado(); } }
+    if (!m) return;
+    var sig = JSON.stringify(m);
+    est.lidoEm = new Date();
+    if (sig !== assinatura) { assinatura = sig; repo = m; podar(); avisar(); }
+    mudouEstado();
+  }
+
+  // ---- envio (em lote: 4 s depois da última marcação, no máximo 30 s depois da primeira) ----
+  function agendar() {
+    if (!conexao() || !Object.keys(local).length) return;
+    var agora = Date.now();
+    if (!primeiroPend) primeiroPend = agora;
+    clearTimeout(tEnvio);
+    tEnvio = setTimeout(enviar, Math.max(0, Math.min(4000, primeiroPend + 30000 - agora)));
+  }
+  async function enviar() {
+    var c = conexao();
+    if (!c || !Object.keys(local).length) return;
+    if (enviando) { deNovo = true; return; }
+    enviando = true; deNovo = false; primeiroPend = 0; clearTimeout(tRetry);
+    est.fase = "enviando"; est.erro = ""; mudouEstado();
+    try {
+      for (var tent = 0; ; tent++) {
+        var lido = await lerApi(c), base = lido.m, junto = {}, k, novos = 0, mandados = {};
+        for (k in base) if (valida(base[k])) junto[k] = base[k];
+        for (k in local) if (valida(local[k]) && (!junto[k] || local[k].t > junto[k].t)) { junto[k] = local[k]; mandados[k] = local[k]; novos++; }
+        if (!novos) { repo = base; break; }
+        var corpo = { message: "Marcações de bloqueio: " + novos + (novos === 1 ? " produto" : " produtos") + (c.nome ? " (" + c.nome + ")" : ""),
+          content: b64DeTexto(JSON.stringify({ v: 1, at: new Date().toISOString(), m: junto })), branch: c.branch };
+        if (lido.sha) corpo.sha = lido.sha;
+        var r = await fetch(urlArq(c), { method: "PUT", headers: Object.assign(cab(c), { "Content-Type": "application/json" }), body: JSON.stringify(corpo), cache: "no-store" });
+        if (r.ok) {
+          repo = junto;
+          for (k in mandados) if (local[k] === mandados[k]) delete local[k];
+          gravarLocal();
+          break;
+        }
+        if ((r.status === 409 || r.status === 422) && tent < 4) { await new Promise(function (ok) { setTimeout(ok, 600 + Math.random() * 900); }); continue; } // outra pessoa gravou ao mesmo tempo
+        throw erroHttp(r);
+      }
+      assinatura = JSON.stringify(repo);
+      est.fase = "ok"; est.enviadoEm = new Date();
+      avisar();
+    } catch (e) {
+      if (e.status === 401 || e.status === 403 || e.status === 404) { est.fase = "chave"; est.erro = e.status === 404 ? "o repositório não foi encontrado com esta chave" : "a chave do GitHub não vale mais ou não pode gravar"; }
+      else { est.fase = "erro"; est.erro = "sem conexão com o GitHub"; tRetry = setTimeout(enviar, 30000); }
+    } finally {
+      enviando = false; mudouEstado();
+      if (deNovo || (est.fase === "ok" && Object.keys(local).length)) agendar();
+    }
+  }
+
+  async function iniciar(fn, fnEstado) {
+    ouvinte = fn; aoEstado = fnEstado || null; local = lerLocal();
+    var c = conexao(), m = null;
+    try { m = c ? (await lerApi(c)).m : await lerSite(); } catch (e) { m = null; }
+    if (!m) { try { m = await lerSite(); } catch (e) { m = null; } }
+    repo = m || {}; assinatura = JSON.stringify(repo); est.lidoEm = new Date();
+    podar();
     fn(juntar());
+    mudouEstado();
+    setInterval(atualizar, 60000);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") atualizar();
+      else if (Object.keys(local).length && conexao()) enviar(); // fechando a aba: tenta mandar o que falta
+    });
+    if (c && Object.keys(local).length) enviar();
   }
   function salvar(itens) {
     itens.forEach(function (it) { local[it.emp + "|" + it.cod] = it.e; });
     var ok = gravarLocal();
-    if (ouvinte) ouvinte(juntar());
-    return ok ? Promise.resolve() : Promise.reject({ code: "storage", message: "o navegador não deixou guardar; baixe o bloqueios.json antes de fechar a página" });
+    avisar();
+    agendar();
+    return ok ? Promise.resolve() : Promise.reject({ code: "storage", message: "o navegador não deixou guardar" });
+  }
+  // Conecta com uma chave (token) do GitHub: confere se ela pode gravar no repositório do site
+  async function conectar(token, owner, repoNome, nome) {
+    token = String(token || "").trim();
+    var alvo = repoDoSite() || { owner: owner, repo: repoNome };
+    if (!token) throw new Error("cole a chave do GitHub");
+    if (!alvo.owner || !alvo.repo) throw new Error("informe o dono e o nome do repositório");
+    var c = { token: token, owner: alvo.owner, repo: alvo.repo, nome: String(nome || "").trim().slice(0, 60) };
+    var r = await fetch(API + "/repos/" + encodeURIComponent(c.owner) + "/" + encodeURIComponent(c.repo), { headers: cab(c), cache: "no-store" });
+    if (r.status === 401) throw new Error("a chave não foi aceita pelo GitHub (confira se copiou inteira ou se não venceu)");
+    if (r.status === 404 || r.status === 403) throw new Error("esta chave não tem acesso ao repositório " + c.owner + "/" + c.repo);
+    if (!r.ok) throw new Error("o GitHub respondeu " + r.status + "; tente de novo");
+    var j = await r.json();
+    if (j.permissions && !j.permissions.push) throw new Error("esta chave só pode ler o repositório; ela precisa de Contents: Read and write");
+    c.branch = j.default_branch || "main";
+    try { var u = await fetch(API + "/user", { headers: cab(c), cache: "no-store" }); if (u.ok) c.login = (await u.json()).login || ""; } catch (e) { /* só para mostrar */ }
+    try { localStorage.setItem(CHAVE_GH, JSON.stringify(c)); } catch (e) { throw new Error("o navegador não deixou guardar a chave"); }
+    est.fase = ""; est.erro = "";
+    await atualizar();
+    if (Object.keys(local).length) await enviar();
+    mudouEstado();
+    return c;
+  }
+  function desconectar() { try { localStorage.removeItem(CHAVE_GH); } catch (e) { /* nada */ } est.fase = ""; est.erro = ""; mudouEstado(); }
+  function estado() {
+    var c = conexao();
+    return { conectado: !!c, login: c && c.login, nome: c && c.nome, repo: c ? c.owner + "/" + c.repo : (repoDoSite() ? repoDoSite().owner + "/" + repoDoSite().repo : ""),
+      noSite: !!repoDoSite(), fase: est.fase, erro: est.erro, enviadoEm: est.enviadoEm, lidoEm: est.lidoEm, pendentes: Object.keys(local).length };
   }
   function pendentes() { return Object.keys(local).length; }
   function paraPublicar() { return { v: 1, at: new Date().toISOString(), m: juntar() }; }
-  return { iniciar: iniciar, salvar: salvar, pendentes: pendentes, paraPublicar: paraPublicar };
+  return { iniciar: iniciar, salvar: salvar, pendentes: pendentes, paraPublicar: paraPublicar, conectar: conectar, desconectar: desconectar,
+    estado: estado, atualizar: atualizar, enviar: enviar };
 })();
 
 // ===== Tabela de NCM (descrição de cada código) =====

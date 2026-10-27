@@ -574,6 +574,7 @@
     var el = $("saveState"); if (!el) return;
     el.hidden = !MK.on;
     if (!MK.on) return;
+    if (MarkStore.estado && !MK.saving && !MK.failed) { var ov = MarkStore.estado(); if (ov) { el.className = "savestate " + ov.cls; el.textContent = ov.text; return; } }
     var st = MK.readonly ? "ro" : MK.saving ? "busy" : MK.failed ? "err" : MK.savedAt ? "ok" : "";
     el.className = "savestate " + st;
     el.textContent = MK.readonly ? "Só leitura: sem permissão para marcar"
@@ -720,22 +721,89 @@
 
   // ---------- marcações: navegador + dados/bloqueios.json ----------
   var MarkStore = {
-    start: function () { Marcas.iniciar(onMarks); },
+    start: function () { Marcas.iniciar(onMarks, function () { scheduleMarkRender(); }); },
     save: function (items) { return Marcas.salvar(items); },
-    hint: function () {
-      var p = Marcas.pendentes();
-      return p ? (p === 1 ? "1 marcação só neste navegador" : n(p) + " marcações só neste navegador") : "As marcações salvam sozinhas";
-    },
-    savedText: "Salvo neste navegador",
-    note: "marque na lista os produtos que você bloqueou no Protheus. Fica salvo neste navegador na hora; envie ao GitHub para todos verem.",
+    hint: function () { return ""; },
+    savedText: "Salvo",
+    note: "marque na lista os produtos que você bloqueou no Protheus. Com o GitHub conectado neste navegador, cada marcação vai sozinha para o repositório e aparece para todos em 1 a 2 minutos.",
     why: function (e) { return e && e.message ? " (" + e.message + ")" : ""; },
+    // texto do indicador "salvo" (substitui o padrão)
+    estado: function () {
+      var e = Marcas.estado(), hm = function (d) { return d ? d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : ""; };
+      if (e.conectado) {
+        if (e.fase === "chave") return { cls: "err", text: "Não salvou para todos: " + e.erro };
+        if (e.fase === "erro") return { cls: "err", text: "Sem conexão com o GitHub — tento de novo em 30 s" };
+        if (e.fase === "enviando" || e.pendentes) return { cls: "busy", text: "Salvando para todos…" };
+        if (e.enviadoEm) return { cls: "ok", text: "Salvo para todos às " + hm(e.enviadoEm) };
+        return { cls: "ok", text: "Conectado: o que você marcar aparece para todos" };
+      }
+      if (e.pendentes) return { cls: "err", text: (e.pendentes === 1 ? "1 marcação" : n(e.pendentes) + " marcações") + " só neste navegador" };
+      return { cls: "ok", text: "Marcações de todos · atualizado às " + hm(e.lidoEm) };
+    },
     extra: function () {
-      var p = Marcas.pendentes(), pn = TabelaNcm.pendente() || TabelaGrupos.pendente();
-      if (!p && !pn) return [];
-      return [h("button", { cls: "btn small", type: "button", title: "Baixar os arquivos para enviar ao repositório",
-        text: "Enviar ao GitHub" + (p ? " (" + n(p) + ")" : ""), onclick: function () { openPublish(); } })];
+      var e = Marcas.estado(), out = [];
+      if (!e.conectado) out.push(h("button", { cls: "btn small" + (e.pendentes ? " primary" : ""), type: "button", title: "Conectar o GitHub para que as marcações apareçam para todos",
+        text: "Salvar para todos" + (e.pendentes ? " (" + n(e.pendentes) + ")" : ""), onclick: abrirConexao }));
+      else if (e.fase === "chave") out.push(h("button", { cls: "btn small primary", type: "button", text: "Conectar de novo", onclick: abrirConexao }));
+      else out.push(h("button", { cls: "btn small", type: "button", title: "Conexão com o GitHub", text: "GitHub" + (e.login ? ": " + e.login : ""), onclick: abrirConexao }));
+      if (TabelaNcm.pendente() || TabelaGrupos.pendente()) out.push(h("button", { cls: "btn small", type: "button", title: "Baixar as tabelas para enviar ao repositório",
+        text: "Enviar tabelas ao GitHub", onclick: function () { openPublish(); } }));
+      return out;
     }
   };
+
+  // Janela "Salvar as marcações para todos": conecta uma chave do GitHub neste navegador
+  function abrirConexao() {
+    var e = Marcas.estado(), host = $("drawerHost"); host.textContent = "";
+    var close = function () { host.textContent = ""; document.removeEventListener("keydown", esc); };
+    var esc = function (ev) { if (ev.key === "Escape") close(); };
+    var msgs = h("ul", { cls: "warnlist" });
+    var aviso = function (t, ok) { msgs.textContent = ""; msgs.appendChild(h("li", { cls: ok ? "ok" : null, text: t })); };
+    var kids = [h("div", { cls: "eyebrow", text: "Marcações para todos" }), h("h2", { text: "Salvar as marcações para todos" }),
+      h("p", { cls: "note", style: "font-size:13px", text: "Com a chave do GitHub conectada neste navegador, cada produto que você marcar como bloqueado é gravado no repositório do site e aparece para todos em 1 a 2 minutos. Quem só consulta não precisa conectar nada: o site busca as marcações de todos a cada minuto." })];
+    if (e.conectado) {
+      kids.push(h("div", { cls: "gh-ok" }, [h("strong", { text: e.fase === "chave" ? "A chave precisa ser trocada" : "Conectado" }),
+        h("span", { text: (e.login ? "Conta " + e.login + " · " : "") + "repositório " + e.repo + (e.nome ? " · marcações em nome de " + e.nome : "") })]));
+      if (e.fase === "chave") kids.push(h("ul", { cls: "warnlist" }, [h("li", { text: "O GitHub recusou a chave: " + e.erro + ". Crie uma chave nova (passos abaixo) e conecte de novo." })]));
+      kids.push(h("div", { cls: "actions", style: "justify-content:flex-start" }, [
+        e.pendentes ? h("button", { cls: "btn primary", type: "button", text: "Enviar agora (" + n(e.pendentes) + ")", onclick: function () { Marcas.enviar(); close(); } }) : null,
+        h("button", { cls: "btn", type: "button", text: "Desconectar este navegador", onclick: function () { Marcas.desconectar(); close(); } })]));
+    }
+    if (!e.conectado || e.fase === "chave") {
+      var inTok = h("input", { type: "password", cls: "inp", placeholder: "github_pat_…", autocomplete: "off", spellcheck: "false", "aria-label": "Chave do GitHub" });
+      var inNome = h("input", { type: "text", cls: "inp", placeholder: "Seu nome (vai no histórico do GitHub)", value: e.nome || "", "aria-label": "Seu nome" });
+      var inOwner = h("input", { type: "text", cls: "inp", placeholder: "Dono do repositório (ex.: kaiquesiqueira-tech)", "aria-label": "Dono do repositório" });
+      var inRepo = h("input", { type: "text", cls: "inp", placeholder: "Nome do repositório", "aria-label": "Nome do repositório" });
+      var btn = h("button", { cls: "btn primary", type: "button", text: "Conectar" });
+      btn.addEventListener("click", async function () {
+        btn.disabled = true; btn.textContent = "Conferindo…"; msgs.textContent = "";
+        try {
+          var c = await Marcas.conectar(inTok.value, inOwner.value.trim(), inRepo.value.trim(), inNome.value);
+          aviso("Conectado" + (c.login ? " como " + c.login : "") + ". Daqui para frente cada marcação vai para todos sozinha.", true);
+          setTimeout(close, 1600);
+        } catch (err) {
+          aviso("Não conectou: " + (err && err.message ? err.message : err) + ".");
+          btn.disabled = false; btn.textContent = "Conectar";
+        }
+      });
+      kids.push(h("ol", { cls: "steps", style: "padding-left:18px;margin:0" }, [
+        h("li", null, ["Quem é dono do repositório cria a chave no GitHub: ", h("a", { href: "https://github.com/settings/personal-access-tokens/new", target: "_blank", rel: "noopener", text: "Fine-grained token → Generate new token" }), "."]),
+        h("li", { text: "Em Repository access, escolha Only select repositories → " + (e.repo ? e.repo.split("/")[1] : "o repositório do site") + "." }),
+        h("li", { text: "Em Permissions → Repository permissions → Contents, escolha Read and write. Gere a chave e copie (começa com github_pat_)." }),
+        h("li", { text: "Cole aqui, no computador de quem marca os bloqueios:" })]));
+      kids.push(inTok, inNome);
+      if (!e.noSite) kids.push(h("p", { cls: "note", style: "margin:0", text: "Este endereço não é do GitHub Pages; informe o repositório:" }), inOwner, inRepo);
+      kids.push(h("div", { cls: "actions", style: "justify-content:flex-start" }, [btn]));
+      kids.push(h("p", { cls: "note", style: "font-size:12px", text: "A chave fica guardada só neste navegador e só dá acesso a este repositório. Não conecte em computador compartilhado. Para tirar, use “Desconectar este navegador”." }));
+      if (!e.conectado && e.pendentes) kids.push(h("p", { cls: "note", style: "font-size:12px" }, ["Sem conectar, dá para mandar do jeito antigo: ",
+        h("button", { cls: "lnk", type: "button", text: "baixar o bloqueios.json", onclick: function () { Armazem.baixar("bloqueios.json", JSON.stringify(Marcas.paraPublicar()), "application/json"); } }), " e rodar o PUBLICAR."]));
+    }
+    kids.push(msgs, h("div", { cls: "actions" }, [h("button", { cls: "btn", type: "button", text: "Fechar", onclick: close })]));
+    var panel = h("div", { cls: "drawer", role: "dialog", "aria-modal": "true", "aria-label": "Salvar as marcações para todos" }, kids);
+    var bg = h("div", { cls: "drawer-bg", onclick: function (ev) { if (ev.target === bg) close(); } }, [panel]);
+    host.appendChild(bg);
+    document.addEventListener("keydown", esc);
+  }
 
   // ---------- tables ----------
   var TABS = [
@@ -1094,7 +1162,7 @@
     }
     chip("b95", "95–100%", cnt.b95);
     chip("b80", "80–94%", cnt.b80);
-    if (MK.on) chip("feito", "Já marquei", F.feitos.length);
+    if (MK.on) chip("feito", "Já bloqueados", F.feitos.length);
     // grupos (da faixa escolhida)
     var base = ST.fb === "feito" ? F.feitos : F.pend.filter(function (x) { return x.band === ST.fb; });
     var gc = {};
@@ -1130,7 +1198,7 @@
     });
     if (!slice.length) {
       var vazio = ST.fq || ST.fg ? "Nenhum produto com estes filtros."
-        : ST.fb === "feito" ? "Você ainda não marcou nenhum produto nesta empresa."
+        : ST.fb === "feito" ? "Nenhum produto marcado como bloqueado nesta empresa ainda."
         : "Nada para bloquear nesta faixa. " + (ST.fb === "b95" && cnt.b80 ? "Veja a faixa 80–94%." : "");
       box.appendChild(h("div", { cls: "fvazio", text: vazio }));
     }
