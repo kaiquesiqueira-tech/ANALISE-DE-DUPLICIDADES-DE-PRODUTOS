@@ -132,6 +132,45 @@ function importarDownloads(dl) {
   return n;
 }
 
+// Medições apagadas por engano voltam (o histórico do git guarda tudo):
+//   1) arquivos de dados/ apagados nesta pasta e ainda não enviados → voltam da última versão;
+//   2) medições apagadas em publicações anteriores → voltam da versão de antes de apagar
+//      (só as do mínimo de similaridade atual; as antigas de 70% ficam de fora de propósito).
+function recuperarApagados() {
+  const { execFileSync } = require("child_process");
+  const git = (args) => execFileSync("git", args, { cwd: raiz, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+  try { git(["rev-parse", "--is-inside-work-tree"]); } catch (e) { return 0; }
+  let n = 0;
+  try {
+    git(["ls-files", "--deleted", "--", "dados"]).split(/\r?\n/).filter(Boolean).forEach((f) => {
+      try { git(["checkout", "--", f]); n++; console.log(`  + ${f} (tinha sido apagado nesta pasta; voltou)`); } catch (e) { /* segue */ }
+    });
+  } catch (e) { /* sem git */ }
+  try {
+    global.SimCore = global.SimCore || require(path.join(raiz, "js/simcore.js"));
+    global.XlsxStream = global.XlsxStream || require(path.join(raiz, "js/xlsxstream.js"));
+    const T_MIN = require(path.join(raiz, "js/analise.js")).T_MIN, { dataBR } = require("./processar.js");
+    const vistos = new Set();
+    let sha = null;
+    git(["log", "--diff-filter=D", "--name-only", "--format=@%H", "--", "dados/medicoes"]).split(/\r?\n/).forEach((l) => {
+      if (l.startsWith("@")) { sha = l.slice(1).trim(); return; }
+      const f = l.trim();
+      if (!f || !sha || vistos.has(f) || !/^dados\/medicoes\/s\d{14}\.json$/.test(f)) return;
+      vistos.add(f);
+      const alvo = path.join(raiz, f);
+      if (fs.existsSync(alvo)) return;
+      let txt, D;
+      try { txt = git(["show", sha + "^:" + f]); D = JSON.parse(txt); } catch (e) { return; }
+      if (!D || (D.T || 0) !== T_MIN || !Array.isArray(D.P)) return;
+      fs.mkdirSync(path.dirname(alvo), { recursive: true });
+      fs.writeFileSync(alvo, txt);
+      n++;
+      console.log(`  + ${f} (medição de ${dataBR(D.at)} tinha sido apagada; voltou)`);
+    });
+  } catch (e) { /* sem histórico */ }
+  return n;
+}
+
 // Medição que está em dados/medicoes mas sumiu do historico.json (acontece quando a pasta dados
 // é substituída por uma cópia antiga, por exemplo ao copiar o zip do app por cima) volta para o histórico.
 // Só as do mesmo mínimo de similaridade atual; as antigas de 70% ficam de fora de propósito.
@@ -169,6 +208,7 @@ function repararHistorico() {
 (async () => {
   console.log("\n  Arquivos baixados pelo site (pasta Downloads):");
   importarDownloads(arg("--downloads"));
+  recuperarApagados();
   repararHistorico();
 
   const pasta = path.resolve(raiz, arg("--planilhas") || "planilhas");

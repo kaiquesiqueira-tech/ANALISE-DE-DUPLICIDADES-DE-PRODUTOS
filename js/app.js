@@ -56,7 +56,7 @@
     snaps: [], viewId: null, cur: null, saved: null, preview: null, loadingId: null,
     scope: store("scope") || "all", tab: store("tab") || "saldo",
     bands: { b95: true, b80: true }, q: "", sit: "", tipo: "", page: 0, expanded: null, mk: store("mk") || "", ncm: "", ncmTab: null, grupos: {},
-    view: store("view") || "bloq", fb: "b95", fg: "", fq: "", fpage: 0, fexp: null, ffocus: null
+    view: store("view") || "bloq", fb: "b95", fg: "", fq: "", fstart: 0, fcong: null, fexp: null, ffocus: null
   };
   var PAGE = 50;
 
@@ -184,8 +184,8 @@
     $("fMk").addEventListener("change", function () { setMk($("fMk").value); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); });
     $("btnCsv").addEventListener("click", exportXlsx);
     $("btnCsv").hidden = false;
-    $("fq").addEventListener("input", debounce(function () { ST.fq = $("fq").value.trim().toUpperCase(); ST.fpage = 0; ST.fexp = null; renderFila(); }, 200));
-    $("fGrupo").addEventListener("change", function () { ST.fg = $("fGrupo").value; ST.fpage = 0; ST.fexp = null; renderFila(); });
+    $("fq").addEventListener("input", debounce(function () { ST.fq = $("fq").value.trim().toUpperCase(); ST.fstart = 0; ST.fcong = null; ST.fexp = null; renderFila(); }, 200));
+    $("fGrupo").addEventListener("change", function () { ST.fg = $("fGrupo").value; ST.fstart = 0; ST.fcong = null; ST.fexp = null; renderFila(); });
     $("btnFilaXls").addEventListener("click", exportFila);
     if (window.ResizeObserver) {
       var ro = new ResizeObserver(debounce(function () { renderCharts(); }, 120));
@@ -212,7 +212,7 @@
     return "filial " + sc.slice(2);
   }
   function setScope(sc) {
-    ST.scope = sc; store("scope", sc); ST.page = 0; ST.expanded = null;
+    ST.scope = sc; store("scope", sc); ST.page = 0; ST.expanded = null; ST.fstart = 0; ST.fcong = null;
     renderAll();
   }
   function renderScope() {
@@ -478,11 +478,10 @@
     for (k in MK.local) all[k] = MK.local[k];
     var quando = {};
     for (k in all) { var e = all[k]; if (e && e.on && k.slice(0, k.indexOf("|")) === emp) quando[k.slice(k.indexOf("|") + 1)] = new Date(mkWhen(e)).getTime(); }
-    var DAY = 864e5, sod = function (t) { var d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
-    var hoje = sod(Date.now()), pts = [], eventos = [];
+    var agora = Date.now(), pts = [], eventos = [];
     bases.forEach(function (b, bi) {
-      var L = EVO[b.id], ini = sod(new Date(b.at).getTime()), fim = bi < bases.length - 1 ? sod(new Date(bases[bi + 1].at).getTime()) : hoje + DAY;
-      if (fim <= ini) return; // outra base no mesmo dia: vale a última
+      var L = EVO[b.id], ini = new Date(b.at).getTime(), fim = bi < bases.length - 1 ? new Date(bases[bi + 1].at).getTime() : agora;
+      if (fim <= ini && bi < bases.length - 1) return;
       var lista = L && !L.semDetalhe ? (L[emp] || []) : null;
       var Q = lista ? lista.length : (b.doc && b.doc.emp && b.doc.emp[emp] && b.doc.emp[emp].fila ? b.doc.emp[emp].fila.n : null);
       if (Q == null) return;
@@ -491,20 +490,24 @@
       ts.sort(function (x, y) { return x - y; });
       // marcações feitas antes desta base continuam valendo (o produto ainda estava ativo nela)
       var j = 0, antes = pts.length ? pts[pts.length - 1].v : null;
-      while (j < ts.length && ts[j] < ini) j++;
+      while (j < ts.length && ts[j] <= ini) j++;
       eventos.push({ t: ini, b: b, Q: Q, inicio: Q - j, antes: antes });
-      for (var d = ini; d < fim && d <= hoje; d += DAY) {
-        var fimDia = d + DAY, feitos0 = j;
-        while (j < ts.length && ts[j] < fimDia) j++;
-        pts.push({ t: d, v: Q - j, dia: j - feitos0, base: d === ini ? b : null, Q: Q, aprox: !lista });
+      pts.push({ t: ini, v: Q - j, n: 0, base: b, Q: Q, aprox: !lista });
+      // um ponto a cada bloqueio marcado (juntando os do mesmo minuto)
+      while (j < ts.length && ts[j] < fim) {
+        var t0 = ts[j], q = 0;
+        while (j < ts.length && ts[j] < fim && ts[j] - t0 < 60000) { j++; q++; }
+        pts.push({ t: t0, v: Q - j, n: q, Q: Q });
       }
+      if (bi === bases.length - 1) pts.push({ t: Math.max(agora, ini), v: Q - j, n: 0, Q: Q, agora: true });
     });
     return { pts: pts, eventos: eventos };
   }
   function niceRange(lo, hi) {
     if (hi - lo < 10) { var mid = (hi + lo) / 2; lo = mid - 5; hi = mid + 5; }
     var span = hi - lo, raw = span / 4, mag = Math.pow(10, Math.floor(Math.log10(raw))), step = mag;
-    [1, 2, 2.5, 5, 10].some(function (m) { step = m * mag; return raw <= step; });
+    [1, 2, 5, 10].some(function (m) { step = m * mag; return raw <= step; });
+    step = Math.max(1, Math.round(step)); // contagem de produtos: sem casas decimais
     var a = Math.floor(lo / step) * step, b = Math.ceil(hi / step) * step;
     if (a < 0) a = 0;
     return { lo: a, hi: b, step: step };
@@ -515,76 +518,79 @@
     var emp = ST.scope.slice(2), bases = evoBases();
     evoGarantir(bases);
     legend("evoLegend", [{ color: "var(--accent)", label: "Faltam bloquear", line: true }, { color: "var(--axis)", label: "Atualização da base", line: true }]);
-    $("evoSub").textContent = "Produtos da lista Bloquear que ainda faltam, dia a dia · " + scopeName(ST.scope) + ". Cai a cada bloqueio marcado e sobe quando uma base nova traz duplicidades novas.";
+    $("evoSub").textContent = "Produtos da lista Bloquear que ainda faltam · " + scopeName(ST.scope) + ". Cai na hora a cada bloqueio marcado (não precisa atualizar a base) e sobe quando uma base nova traz duplicidades novas.";
     var R = evoPontos(emp), pts = R.pts;
     if (!pts.length) { $("evoNote").textContent = evoCarregando ? "Calculando…" : "Sem dados para " + scopeName(ST.scope) + "."; return; }
-    var first = pts[0], last = pts[pts.length - 1], subiu = 0, feitos = 0;
-    var desceu = 0;
+    var first = pts[0], last = pts[pts.length - 1], subiu = 0, desceu = 0, feitos = 0, hojeN = 0;
+    var d0 = new Date(); d0.setHours(0, 0, 0, 0);
     R.eventos.forEach(function (ev) { if (ev.antes == null) return; if (ev.inicio > ev.antes) subiu += ev.inicio - ev.antes; else desceu += ev.antes - ev.inicio; });
-    pts.forEach(function (p) { feitos += p.dia; });
-    $("evoNote").textContent = "Começou com " + n(first.Q) + " em " + dt(first.t) + " · hoje faltam " + n(last.v) +
-      (last.v !== first.Q ? " (" + (last.v < first.Q ? "−" : "+") + n(Math.abs(last.v - first.Q)) + ")" : "") +
-      " · " + n(feitos) + (feitos === 1 ? " bloqueio marcado" : " bloqueios marcados") + (subiu || desceu ? " · bases novas: " + [subiu ? "+" + n(subiu) + " duplicidades novas" : "", desceu ? "−" + n(desceu) + " que saíram" : ""].filter(Boolean).join(", ") : "") +
+    pts.forEach(function (p) { feitos += p.n; if (p.t >= d0.getTime()) hojeN += p.n; });
+    $("evoNote").textContent = "Começou com " + n(first.v) + " em " + dt(first.t) + " · agora faltam " + n(last.v) +
+      (last.v !== first.v ? " (" + (last.v < first.v ? "−" : "+") + n(Math.abs(last.v - first.v)) + ")" : "") +
+      " · " + n(feitos) + (feitos === 1 ? " bloqueio marcado" : " bloqueios marcados") + (hojeN ? " (" + n(hojeN) + " hoje)" : "") +
+      (subiu || desceu ? " · bases novas: " + [subiu ? "+" + n(subiu) + " duplicidades novas" : "", desceu ? "−" + n(desceu) + " que saíram" : ""].filter(Boolean).join(", ") : "") +
       (evoCarregando ? " · calculando as bases anteriores…" : "");
     var lo = Infinity, hi = -Infinity;
-    pts.forEach(function (p) { lo = Math.min(lo, p.v); hi = Math.max(hi, p.v, p.Q); });
+    pts.forEach(function (p) { lo = Math.min(lo, p.v); hi = Math.max(hi, p.v); });
     var rg = niceRange(lo, hi);
     var W = Math.max(280, box.clientWidth || 600), H = 230, Lm = 56, Rm = 16, T = 22, B = 28;
-    var N = pts.length;
-    var px = function (k) { return N === 1 ? (Lm + W - Rm) / 2 : Lm + (W - Lm - Rm) * k / (N - 1); };
+    var t0 = first.t, t1 = Math.max(last.t, t0 + 3600000), umDia = t1 - t0 < 36 * 3600000;
+    var px = function (t) { return Lm + (W - Lm - Rm) * (t - t0) / (t1 - t0); };
     var py = function (v) { return T + (H - T - B) * (1 - (v - rg.lo) / (rg.hi - rg.lo)); };
-    var svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img", "aria-label": "Faltam bloquear, dia a dia" });
+    var svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img", "aria-label": "Faltam bloquear" });
     for (var tv = rg.lo; tv <= rg.hi + 1e-9; tv += rg.step) {
       svg.appendChild(s("line", { x1: Lm, x2: W - Rm, y1: py(tv), y2: py(tv), class: tv === rg.lo ? "base" : "grid" }));
       svg.appendChild(s("text", { x: Lm - 8, y: py(tv) + 4, "text-anchor": "end", class: "tick" }, NF.format(tv)));
     }
-    // atualizações da base
-    var ultRot = -1e9, bks = [];
-    pts.forEach(function (p, k) { if (p.base) bks.push(k); });
-    bks.forEach(function (k, x) {
-      var p = pts[k];
-      svg.appendChild(s("line", { x1: px(k), x2: px(k), y1: T - 6, y2: H - B, stroke: "var(--axis)", "stroke-width": 1, "stroke-dasharray": "3 3" }));
-      // rótulo só onde cabe (a última base sempre aparece)
-      var prox = x < bks.length - 1 ? px(bks[x + 1]) : 1e9;
-      if (px(k) - ultRot < 70 || (prox - px(k) < 70 && x < bks.length - 1)) return;
-      ultRot = px(k);
-      svg.appendChild(s("text", { x: px(k), y: T - 10, "text-anchor": k === 0 ? "start" : k === N - 1 ? "end" : "middle", class: "tick" }, "base " + dt(p.t).slice(0, 5)));
+    // atualizações da base (rótulo só onde cabe)
+    var ultRot = -1e9, bps = pts.filter(function (p) { return p.base; });
+    bps.forEach(function (p, x) {
+      var X = px(p.t);
+      svg.appendChild(s("line", { x1: X, x2: X, y1: T - 6, y2: H - B, stroke: "var(--axis)", "stroke-width": 1, "stroke-dasharray": "3 3" }));
+      var prox = x < bps.length - 1 ? px(bps[x + 1].t) : 1e9;
+      if (X - ultRot < 70 || (prox - X < 70 && x < bps.length - 1)) return;
+      ultRot = X;
+      svg.appendChild(s("text", { x: X, y: T - 10, "text-anchor": X < Lm + 40 ? "start" : X > W - Rm - 40 ? "end" : "middle", class: "tick" }, "base " + dt(p.t).slice(0, 5)));
     });
-    // datas no eixo
-    var every = Math.max(1, Math.ceil(N / Math.max(2, Math.floor((W - Lm - Rm) / 70))));
-    pts.forEach(function (p, k) {
-      if (k % every && k !== N - 1) return;
-      if (k !== N - 1 && N - 1 - k < every * 0.6) return;
-      svg.appendChild(s("text", { x: px(k), y: H - 8, "text-anchor": N === 1 ? "middle" : k === 0 ? "start" : k === N - 1 ? "end" : "middle", class: "tick" }, k === N - 1 ? "hoje" : new Date(p.t).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })));
-    });
-    // linha (em degraus: o valor vale o dia inteiro)
-    var d = "", area = "";
-    pts.forEach(function (p, k) { d += (k ? "L" + px(k) + "," + py(pts[k - 1].v) + "L" : "M") + px(k) + "," + py(p.v); });
-    area = d + "L" + px(N - 1) + "," + py(rg.lo) + "L" + px(0) + "," + py(rg.lo) + "Z";
+    // eixo do tempo: dias (ou horas, quando tudo cabe em um dia)
+    var nT = Math.max(2, Math.min(7, Math.floor((W - Lm - Rm) / 80)));
+    for (var q = 0; q <= nT; q++) {
+      var tq = t0 + (t1 - t0) * q / nT, dq = new Date(tq);
+      var lab = q === nT ? "agora" : umDia ? dq.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : dq.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+      svg.appendChild(s("text", { x: px(tq), y: H - 8, "text-anchor": q === 0 ? "start" : q === nT ? "end" : "middle", class: "tick" }, lab));
+    }
+    // linha em degraus: o valor vale até o próximo bloqueio
+    var d = "";
+    pts.forEach(function (p, k) { d += (k ? "L" + px(p.t) + "," + py(pts[k - 1].v) + "L" : "M") + px(p.t) + "," + py(p.v); });
+    var area = d + "L" + px(last.t) + "," + py(rg.lo) + "L" + px(first.t) + "," + py(rg.lo) + "Z";
     svg.appendChild(s("path", { d: area, fill: "var(--accent)", "fill-opacity": "0.08" }));
     svg.appendChild(s("path", { d: d, fill: "none", stroke: "var(--accent)", "stroke-width": 2.2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
-    svg.appendChild(s("circle", { cx: px(0), cy: py(first.v), r: 3.5, fill: "var(--accent)", stroke: "var(--surface)", "stroke-width": 2 }));
-    svg.appendChild(s("circle", { cx: px(N - 1), cy: py(last.v), r: 4.5, fill: "var(--accent)", stroke: "var(--surface)", "stroke-width": 2 }));
+    svg.appendChild(s("circle", { cx: px(first.t), cy: py(first.v), r: 3.5, fill: "var(--accent)", stroke: "var(--surface)", "stroke-width": 2 }));
+    svg.appendChild(s("circle", { cx: px(last.t), cy: py(last.v), r: 4.5, fill: "var(--accent)", stroke: "var(--surface)", "stroke-width": 2 }));
     var cross = s("line", { x1: 0, x2: 0, y1: T, y2: H - B, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" });
     svg.appendChild(cross);
     var hit = s("rect", { x: Lm - 10, y: 0, width: W - Lm - Rm + 20, height: H, fill: "transparent" });
     hit.addEventListener("mousemove", function (ev) {
-      var rect = svg.getBoundingClientRect(), mx = (ev.clientX - rect.left) * W / rect.width;
-      var k = N === 1 ? 0 : Math.max(0, Math.min(N - 1, Math.round((mx - Lm) / ((W - Lm - Rm) / (N - 1))))), p = pts[k];
-      cross.setAttribute("x1", px(k)); cross.setAttribute("x2", px(k)); cross.setAttribute("visibility", "visible");
-      var rows = [{ color: "var(--accent)", label: "Faltam bloquear", value: n(p.v) }, { label: "Bloqueios marcados no dia", value: n(p.dia) }];
+      var rect = svg.getBoundingClientRect(), mx = (ev.clientX - rect.left) * W / rect.width, tm = t0 + (mx - Lm) * (t1 - t0) / (W - Lm - Rm);
+      var k = 0;
+      for (var z = 0; z < pts.length; z++) if (pts[z].t <= tm) k = z;
+      var p = pts[k], X = px(p.t);
+      cross.setAttribute("x1", X); cross.setAttribute("x2", X); cross.setAttribute("visibility", "visible");
+      var rows = [{ color: "var(--accent)", label: "Faltam bloquear", value: n(p.v) }];
+      if (p.n) rows.push({ label: p.n === 1 ? "Bloqueio marcado" : "Bloqueios marcados", value: n(p.n) });
       if (p.base) {
         var evb = R.eventos.filter(function (x) { return x.t === p.t; })[0];
         rows.push({ label: "Base atualizada: lista com", value: n(p.Q) });
         if (evb && evb.antes != null && evb.inicio !== evb.antes) rows.push({ label: evb.inicio > evb.antes ? "Duplicidades novas na base" : "Saíram com a base nova", value: (evb.inicio > evb.antes ? "+" : "−") + n(Math.abs(evb.inicio - evb.antes)) });
       }
       if (p.aprox) rows.push({ label: "Sem o detalhe desta base", value: "só o total" });
-      showTip(new Date(p.t).toLocaleDateString("pt-BR"), rows, ev);
+      showTip(p.agora ? "Agora" : dt(p.t, true), rows, ev);
     });
     hit.addEventListener("mouseleave", function () { cross.setAttribute("visibility", "hidden"); hideTip(); });
     svg.appendChild(hit);
     box.appendChild(svg);
   }
+
 
 
   // ---------- marcações de bloqueio ----------
@@ -1219,7 +1225,7 @@
     });
   }
   function setView(v) {
-    ST.view = v; store("view", v);
+    ST.view = v; store("view", v); ST.fcong = null;
     renderViews();
     if (v === "res") { renderKpis(); renderProg(); renderMatrix(); renderCharts(); renderHist(); }
     if (v === "nb") { renderTabs(); renderTable(); }
@@ -1238,7 +1244,7 @@
   }
   function goFila(chip) {
     if (chip) ST.fb = chip;
-    ST.fpage = 0; ST.fexp = null;
+    ST.fstart = 0; ST.fcong = null; ST.fexp = null;
     setView("bloq");
   }
   function goNb(sit, bk, mk) {
@@ -1247,6 +1253,15 @@
     setView("nb");
   }
 
+  function filaChave() { return [ST.scope, ST.fb, ST.fg, ST.fq, ST.fstart].join("|"); }
+  // ao marcar/desmarcar, a página atual fica parada: a linha muda para "Bloqueado" em vez de sumir
+  function congelarFila() {
+    var chave = filaChave();
+    if (ST.fcong && ST.fcong.chave === chave) return;
+    var snap = {};
+    (ST.fslice || []).forEach(function (x) { snap[x.i] = x; });
+    ST.fcong = { chave: chave, itens: (ST.fslice || []).map(function (x) { return x.i; }), snap: snap };
+  }
   function renderFila() {
     var box = $("fila"); if (!box || !ST.cur) return;
     var F = filaDados(), P = ST.cur.D.P, emp = ST.scope.slice(2);
@@ -1273,7 +1288,7 @@
     // faixas
     var fb = $("fBand"); fb.textContent = "";
     function chip(k, label, v) {
-      fb.appendChild(h("button", { cls: "fchip", type: "button", "aria-pressed": String(ST.fb === k), onclick: function () { if (ST.fb === k) return; ST.fb = k; ST.fg = ""; ST.fpage = 0; ST.fexp = null; renderFila(); } },
+      fb.appendChild(h("button", { cls: "fchip", type: "button", "aria-pressed": String(ST.fb === k), onclick: function () { if (ST.fb === k) return; ST.fb = k; ST.fg = ""; ST.fstart = 0; ST.fcong = null; ST.fexp = null; renderFila(); } },
         [label, h("span", { cls: "cnt", text: n(v) })]));
     }
     chip("b95", "95–100%", cnt.b95);
@@ -1293,9 +1308,16 @@
     fg.value = ST.fg;
     // lista
     var list = filaFiltrada(F);
-    var pages = Math.max(1, Math.ceil(list.length / PAGE));
-    if (ST.fpage >= pages) ST.fpage = pages - 1;
-    var slice = list.slice(ST.fpage * PAGE, ST.fpage * PAGE + PAGE);
+    if (ST.fstart >= list.length) ST.fstart = Math.max(0, Math.floor((list.length - 1) / PAGE) * PAGE);
+    var chave = filaChave(), slice;
+    if (ST.fcong && ST.fcong.chave === chave) {
+      // página "congelada": depois de marcar, as linhas ficam no lugar (nada anda debaixo do mouse)
+      slice = ST.fcong.itens.map(function (i0) { var x = Object.assign({}, ST.fcong.snap[i0]); x.feito = !!mkOf(i0); return x; });
+    } else {
+      ST.fcong = null;
+      slice = list.slice(ST.fstart, ST.fstart + PAGE);
+    }
+    ST.fslice = slice;
     var ae = document.activeElement, aePos = null;
     if (ae && box.contains(ae) && ae.type === "checkbox") aePos = Array.prototype.indexOf.call(box.querySelectorAll(".frow input[type=checkbox]"), ae);
     box.textContent = "";
@@ -1319,10 +1341,13 @@
       box.appendChild(h("div", { cls: "fvazio", text: vazio }));
     }
     var pg = $("fPager"); pg.textContent = "";
-    pg.appendChild(h("span", { cls: "num", text: list.length ? (n(ST.fpage * PAGE + 1) + "–" + n(Math.min(list.length, (ST.fpage + 1) * PAGE)) + " de " + n(list.length)) : "" }));
-    if (pages > 1) pg.appendChild(h("div", { cls: "actions" }, [
-      h("button", { cls: "btn small", type: "button", disabled: ST.fpage === 0, text: "← Anterior", onclick: function () { ST.fpage--; ST.fexp = null; renderFila(); $("v-bloq").scrollIntoView({ block: "start" }); } }),
-      h("button", { cls: "btn small", type: "button", disabled: ST.fpage >= pages - 1, text: "Próxima →", onclick: function () { ST.fpage++; ST.fexp = null; renderFila(); $("v-bloq").scrollIntoView({ block: "start" }); } })]));
+    var saiu = 0;
+    if (ST.fcong) { var naLista = {}; list.forEach(function (y) { naLista[y.i] = 1; }); ST.fcong.itens.forEach(function (i0) { if (!naLista[i0]) saiu++; }); }
+    var proximo = ST.fstart + PAGE - saiu;
+    pg.appendChild(h("span", { cls: "num", text: list.length ? (n(ST.fstart + 1) + "–" + n(Math.min(list.length, ST.fstart + slice.length - saiu)) + " de " + n(list.length)) : "" }));
+    if (ST.fstart > 0 || proximo < list.length) pg.appendChild(h("div", { cls: "actions" }, [
+      h("button", { cls: "btn small", type: "button", disabled: ST.fstart === 0, text: "← Anterior", onclick: function () { ST.fstart = Math.max(0, ST.fstart - PAGE); ST.fcong = null; ST.fexp = null; renderFila(); $("v-bloq").scrollIntoView({ block: "start" }); } }),
+      h("button", { cls: "btn small", type: "button", disabled: proximo >= list.length, text: "Próxima →", onclick: function () { ST.fstart = Math.max(0, proximo); ST.fcong = null; ST.fexp = null; renderFila(); $("v-bloq").scrollIntoView({ block: "start" }); } })]));
     // foco: depois de marcar, a próxima linha fica no lugar da que saiu
     var alvo = ST.ffocus != null ? ST.ffocus : aePos;
     if (alvo != null && alvo >= 0) {
@@ -1363,7 +1388,7 @@
       (function () {
         var inp = h("input", { type: "checkbox", disabled: MK.readonly || !MK.on, "aria-label": (x.feito ? "Desmarcar " : "Bloqueei ") + P[i][1] + " " + P[i][2] });
         inp.checked = !!x.feito;
-        inp.addEventListener("change", function () { ST.ffocus = pos; if (ST.fexp === i) ST.fexp = null; setMarks([i], inp.checked); });
+        inp.addEventListener("change", function () { congelarFila(); ST.ffocus = inp.checked ? pos + 1 : pos; setMarks([i], inp.checked); });
         return inp;
       })(),
       h("span", { cls: "box", "aria-hidden": "true" }),
@@ -1379,6 +1404,7 @@
     return row;
   }
   function filaDetalhe(x) {
+    congelarFila();
     var P = ST.cur.D.P, i = x.i, all = neighbors(i), nbs = all.slice(0, 40), mkOn = MK.on;
     var sims = h("div", { cls: "sims" }, nbs.map(function (y) {
       var dn = mkOn && !!mkOf(y[0]);
