@@ -362,19 +362,6 @@
   }
   function renderCharts() {
     if (!ST.cur || !mounted) return;
-    legend("filBandLegend", BANDS.map(function (b) { return { color: b.color, label: b.label }; }));
-    legend("filSitLegend", SITS.map(function (x) { return { color: x.color, label: x.label }; }));
-    var S = ST.cur.R.summary, D = ST.cur.D;
-    function rowsFor(segDefs) {
-      return D.empresas.map(function (e) {
-        var A = S.emp[e];
-        var dim = ST.scope !== "e:" + e;
-        return { key: e, label: "Empresa " + e, A: A, dim: dim, total: A.comSim, base: A.prod,
-          segs: segDefs.map(function (sd) { return { label: sd.label, color: sd.color, value: A[sd.k] }; }) };
-      });
-    }
-    stackedBars($("filBandChart"), rowsFor(BANDS.map(function (b) { return { k: b.k, label: b.label, color: b.color }; })));
-    stackedBars($("filSitChart"), rowsFor(SITS));
     renderEvo();
     drawProgChart();
   }
