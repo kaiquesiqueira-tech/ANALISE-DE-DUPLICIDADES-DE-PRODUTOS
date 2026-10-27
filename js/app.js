@@ -430,66 +430,162 @@
     if (ST.preview) pts.push({ at: ST.preview.D.at, A: aggFor(ST.preview.R.summary, ST.scope), id: null, preview: true });
     return pts;
   }
+  // ---------- evolução: quanto falta bloquear, dia a dia ----------
+  // Cada atualização da base traz a lista "Bloquear" daquela base (sem marcações). A cada dia, faltam
+  // os pares da lista que ainda não tinham nenhum dos dois produtos marcado como bloqueado até aquele dia.
+  // A linha cai a cada bloqueio marcado e sobe quando uma base nova traz duplicidades novas.
+  var EVO = {};
+  function evoLista(obj) {
+    var P = obj.D.P, K = obj.R.info.filaKeep, out = {};
+    if (!K) return out;
+    for (var i = 0; i < P.length; i++) if (K[i] >= 0) (out[P[i][0]] = out[P[i][0]] || []).push([P[i][1], P[K[i]][1]]);
+    return out;
+  }
+  function detalheDoc(doc) {
+    if (typeof Armazem !== "undefined" && Armazem.detalhe) return Armazem.detalhe(doc);
+    return fetch("/_blob/" + doc.detail).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
+  }
+  function docTemDetalhe(doc) { return typeof temDetalhe === "function" ? temDetalhe(doc) : !!(doc && doc.detail); }
+  function evoBases() {
+    var T = ST.cur.D.T || 80;
+    var bs = ST.snaps.filter(function (d) { return (d.T || 70) === T; }).map(function (d) { return { id: d.id, at: d.at, doc: d }; });
+    if (ST.preview) bs.push({ id: "previa:" + ST.cur.D.at, at: ST.cur.D.at, doc: null, previa: true });
+    bs.sort(function (a, b) { return a.at < b.at ? -1 : 1; });
+    return bs.slice(-12);
+  }
+  var evoCarregando = false;
+  async function evoGarantir(bases) {
+    if (evoCarregando) return;
+    var falta = bases.filter(function (b) { return !EVO[b.id]; });
+    if (!falta.length) return;
+    evoCarregando = true;
+    try {
+      for (var k = 0; k < falta.length; k++) {
+        var b = falta[k];
+        if ((ST.cur.id && b.id === ST.cur.id && !ST.preview) || (b.previa && ST.preview)) { EVO[b.id] = evoLista(ST.cur); continue; }
+        if (!b.doc || !docTemDetalhe(b.doc)) { EVO[b.id] = { semDetalhe: true }; continue; }
+        try {
+          var D = await detalheDoc(b.doc);
+          EVO[b.id] = evoLista({ D: D, R: DupAnalysis.summarize(D) });
+        } catch (e) { EVO[b.id] = { semDetalhe: true }; }
+      }
+    } finally { evoCarregando = false; }
+    if (ST.cur && mounted) renderEvo();
+  }
+  function evoPontos(emp) {
+    var bases = evoBases(), all = {}, k;
+    for (k in MK.server) all[k] = MK.server[k];
+    for (k in MK.local) all[k] = MK.local[k];
+    var quando = {};
+    for (k in all) { var e = all[k]; if (e && e.on && k.slice(0, k.indexOf("|")) === emp) quando[k.slice(k.indexOf("|") + 1)] = new Date(mkWhen(e)).getTime(); }
+    var DAY = 864e5, sod = function (t) { var d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+    var hoje = sod(Date.now()), pts = [], eventos = [];
+    bases.forEach(function (b, bi) {
+      var L = EVO[b.id], ini = sod(new Date(b.at).getTime()), fim = bi < bases.length - 1 ? sod(new Date(bases[bi + 1].at).getTime()) : hoje + DAY;
+      if (fim <= ini) return; // outra base no mesmo dia: vale a última
+      var lista = L && !L.semDetalhe ? (L[emp] || []) : null;
+      var Q = lista ? lista.length : (b.doc && b.doc.emp && b.doc.emp[emp] && b.doc.emp[emp].fila ? b.doc.emp[emp].fila.n : null);
+      if (Q == null) return;
+      var ts = [];
+      if (lista) lista.forEach(function (pr) { var a = quando[pr[0]], c = quando[pr[1]], m = Math.min(a == null ? Infinity : a, c == null ? Infinity : c); if (m < Infinity) ts.push(m); });
+      ts.sort(function (x, y) { return x - y; });
+      // marcações feitas antes desta base continuam valendo (o produto ainda estava ativo nela)
+      var j = 0, antes = pts.length ? pts[pts.length - 1].v : null;
+      while (j < ts.length && ts[j] < ini) j++;
+      eventos.push({ t: ini, b: b, Q: Q, inicio: Q - j, antes: antes });
+      for (var d = ini; d < fim && d <= hoje; d += DAY) {
+        var fimDia = d + DAY, feitos0 = j;
+        while (j < ts.length && ts[j] < fimDia) j++;
+        pts.push({ t: d, v: Q - j, dia: j - feitos0, base: d === ini ? b : null, Q: Q, aprox: !lista });
+      }
+    });
+    return { pts: pts, eventos: eventos };
+  }
+  function niceRange(lo, hi) {
+    if (hi - lo < 10) { var mid = (hi + lo) / 2; lo = mid - 5; hi = mid + 5; }
+    var span = hi - lo, raw = span / 4, mag = Math.pow(10, Math.floor(Math.log10(raw))), step = mag;
+    [1, 2, 2.5, 5, 10].some(function (m) { step = m * mag; return raw <= step; });
+    var a = Math.floor(lo / step) * step, b = Math.ceil(hi / step) * step;
+    if (a < 0) a = 0;
+    return { lo: a, hi: b, step: step };
+  }
   function renderEvo() {
-    var box = $("evoChart"); box.textContent = "";
-    var SER = [{ k: "comSim", label: "Com similar (total)", color: "var(--total)" }].concat(BANDS.map(function (b) { return { k: b.k, label: b.label, color: b.color }; }));
-    legend("evoLegend", SER.map(function (x) { return { color: x.color, label: x.label, line: true }; }));
-    $("evoSub").textContent = "Produtos com similar, por faixa · " + scopeName(ST.scope);
-    var pts = evoSeries();
-    $("evoNote").textContent = pts.length < 2 ? "A evolução aparece a partir da 2ª medição. Atualize a base sempre que exportar o Protheus." : "";
-    var W = Math.max(280, box.clientWidth || 600), H = 230, L = 52, R = 16, T = 12, B = 28;
-    var max = 1;
-    pts.forEach(function (p) { if (p.A) SER.forEach(function (sr) { max = Math.max(max, p.A[sr.k] || 0); }); });
-    var ax = niceAxis(max); max = ax.max;
-    var px = function (i) { return pts.length === 1 ? (L + (W - R)) / 2 : L + (W - L - R) * i / (pts.length - 1); };
-    var py = function (v) { return T + (H - T - B) * (1 - v / max); };
-    var svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img" });
-    for (var t = 0; t <= ax.n; t++) {
-      var tv = ax.step * t;
-      svg.appendChild(s("line", { x1: L, x2: W - R, y1: py(tv), y2: py(tv), class: t ? "grid" : "base" }));
-      svg.appendChild(s("text", { x: L - 8, y: py(tv) + 4, "text-anchor": "end", class: "tick" }, NF.format(tv)));
+    var box = $("evoChart"); if (!box) return;
+    box.textContent = "";
+    var emp = ST.scope.slice(2), bases = evoBases();
+    evoGarantir(bases);
+    legend("evoLegend", [{ color: "var(--accent)", label: "Faltam bloquear", line: true }, { color: "var(--axis)", label: "Atualização da base", line: true }]);
+    $("evoSub").textContent = "Produtos da lista Bloquear que ainda faltam, dia a dia · " + scopeName(ST.scope) + ". Cai a cada bloqueio marcado e sobe quando uma base nova traz duplicidades novas.";
+    var R = evoPontos(emp), pts = R.pts;
+    if (!pts.length) { $("evoNote").textContent = evoCarregando ? "Calculando…" : "Sem dados para " + scopeName(ST.scope) + "."; return; }
+    var first = pts[0], last = pts[pts.length - 1], subiu = 0, feitos = 0;
+    var desceu = 0;
+    R.eventos.forEach(function (ev) { if (ev.antes == null) return; if (ev.inicio > ev.antes) subiu += ev.inicio - ev.antes; else desceu += ev.antes - ev.inicio; });
+    pts.forEach(function (p) { feitos += p.dia; });
+    $("evoNote").textContent = "Começou com " + n(first.Q) + " em " + dt(first.t) + " · hoje faltam " + n(last.v) +
+      (last.v !== first.Q ? " (" + (last.v < first.Q ? "−" : "+") + n(Math.abs(last.v - first.Q)) + ")" : "") +
+      " · " + n(feitos) + (feitos === 1 ? " bloqueio marcado" : " bloqueios marcados") + (subiu || desceu ? " · bases novas: " + [subiu ? "+" + n(subiu) + " duplicidades novas" : "", desceu ? "−" + n(desceu) + " que saíram" : ""].filter(Boolean).join(", ") : "") +
+      (evoCarregando ? " · calculando as bases anteriores…" : "");
+    var lo = Infinity, hi = -Infinity;
+    pts.forEach(function (p) { lo = Math.min(lo, p.v); hi = Math.max(hi, p.v, p.Q); });
+    var rg = niceRange(lo, hi);
+    var W = Math.max(280, box.clientWidth || 600), H = 230, Lm = 56, Rm = 16, T = 22, B = 28;
+    var N = pts.length;
+    var px = function (k) { return N === 1 ? (Lm + W - Rm) / 2 : Lm + (W - Lm - Rm) * k / (N - 1); };
+    var py = function (v) { return T + (H - T - B) * (1 - (v - rg.lo) / (rg.hi - rg.lo)); };
+    var svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img", "aria-label": "Faltam bloquear, dia a dia" });
+    for (var tv = rg.lo; tv <= rg.hi + 1e-9; tv += rg.step) {
+      svg.appendChild(s("line", { x1: Lm, x2: W - Rm, y1: py(tv), y2: py(tv), class: tv === rg.lo ? "base" : "grid" }));
+      svg.appendChild(s("text", { x: Lm - 8, y: py(tv) + 4, "text-anchor": "end", class: "tick" }, NF.format(tv)));
     }
-    var every = Math.max(1, Math.ceil(pts.length / Math.max(2, Math.floor((W - L - R) / 90))));
-    var sameDay = {};
-    pts.forEach(function (p) { var k = dt(p.at); sameDay[k] = (sameDay[k] || 0) + 1; });
-    pts.forEach(function (p, i) {
-      if (i % every && i !== pts.length - 1) return;
-      var lab = new Date(p.at).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
-      if (sameDay[dt(p.at)] > 1) lab += " " + new Date(p.at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-      if (p.preview) lab += " (prévia)";
-      svg.appendChild(s("text", { x: px(i), y: H - 8, "text-anchor": pts.length === 1 ? "middle" : i === 0 ? "start" : i === pts.length - 1 ? "end" : "middle", class: "tick" }, lab));
+    // atualizações da base
+    var ultRot = -1e9, bks = [];
+    pts.forEach(function (p, k) { if (p.base) bks.push(k); });
+    bks.forEach(function (k, x) {
+      var p = pts[k];
+      svg.appendChild(s("line", { x1: px(k), x2: px(k), y1: T - 6, y2: H - B, stroke: "var(--axis)", "stroke-width": 1, "stroke-dasharray": "3 3" }));
+      // rótulo só onde cabe (a última base sempre aparece)
+      var prox = x < bks.length - 1 ? px(bks[x + 1]) : 1e9;
+      if (px(k) - ultRot < 70 || (prox - px(k) < 70 && x < bks.length - 1)) return;
+      ultRot = px(k);
+      svg.appendChild(s("text", { x: px(k), y: T - 10, "text-anchor": k === 0 ? "start" : k === N - 1 ? "end" : "middle", class: "tick" }, "base " + dt(p.t).slice(0, 5)));
     });
-    SER.forEach(function (sr) {
-      var d = "", started = false;
-      pts.forEach(function (p, i) {
-        if (!p.A) { started = false; return; }
-        d += (started ? "L" : "M") + px(i) + "," + py(p.A[sr.k] || 0);
-        started = true;
-      });
-      if (d) svg.appendChild(s("path", { d: d, fill: "none", stroke: sr.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
-      pts.forEach(function (p, i) {
-        if (!p.A) return;
-        svg.appendChild(s("circle", { cx: px(i), cy: py(p.A[sr.k] || 0), r: i === pts.length - 1 ? 4.5 : 3.5, fill: sr.color, stroke: "var(--surface)", "stroke-width": 2 }));
-      });
+    // datas no eixo
+    var every = Math.max(1, Math.ceil(N / Math.max(2, Math.floor((W - Lm - Rm) / 70))));
+    pts.forEach(function (p, k) {
+      if (k % every && k !== N - 1) return;
+      if (k !== N - 1 && N - 1 - k < every * 0.6) return;
+      svg.appendChild(s("text", { x: px(k), y: H - 8, "text-anchor": N === 1 ? "middle" : k === 0 ? "start" : k === N - 1 ? "end" : "middle", class: "tick" }, k === N - 1 ? "hoje" : new Date(p.t).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })));
     });
+    // linha (em degraus: o valor vale o dia inteiro)
+    var d = "", area = "";
+    pts.forEach(function (p, k) { d += (k ? "L" + px(k) + "," + py(pts[k - 1].v) + "L" : "M") + px(k) + "," + py(p.v); });
+    area = d + "L" + px(N - 1) + "," + py(rg.lo) + "L" + px(0) + "," + py(rg.lo) + "Z";
+    svg.appendChild(s("path", { d: area, fill: "var(--accent)", "fill-opacity": "0.08" }));
+    svg.appendChild(s("path", { d: d, fill: "none", stroke: "var(--accent)", "stroke-width": 2.2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    svg.appendChild(s("circle", { cx: px(0), cy: py(first.v), r: 3.5, fill: "var(--accent)", stroke: "var(--surface)", "stroke-width": 2 }));
+    svg.appendChild(s("circle", { cx: px(N - 1), cy: py(last.v), r: 4.5, fill: "var(--accent)", stroke: "var(--surface)", "stroke-width": 2 }));
     var cross = s("line", { x1: 0, x2: 0, y1: T, y2: H - B, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" });
     svg.appendChild(cross);
-    var hit = s("rect", { x: L - 10, y: 0, width: W - L - R + 20, height: H, fill: "transparent" });
+    var hit = s("rect", { x: Lm - 10, y: 0, width: W - Lm - Rm + 20, height: H, fill: "transparent" });
     hit.addEventListener("mousemove", function (ev) {
-      var rect = svg.getBoundingClientRect(), mx = (ev.clientX - rect.left) * W / rect.width, bi = 0, bd = 1e9;
-      pts.forEach(function (p, i) { var dd = Math.abs(px(i) - mx); if (dd < bd) { bd = dd; bi = i; } });
-      var p = pts[bi];
-      cross.setAttribute("x1", px(bi)); cross.setAttribute("x2", px(bi)); cross.setAttribute("visibility", "visible");
-      if (!p.A) { showTip(dt(p.at, true), [{ label: "Sem dados para " + scopeName(ST.scope), value: "" }], ev); return; }
-      showTip((p.preview ? "Prévia · " : "") + dt(p.at, true), SER.map(function (sr) { return { color: sr.color, label: sr.label, value: n(p.A[sr.k]) }; }).concat([
-        { label: "Não bloquear", value: n(p.A.S + p.A.P + p.A.R) },
-        { label: "Podem ser bloqueados", value: n(p.A.L1 + p.A.L2) },
-        { label: "Inativos (bloqueados)", value: p.A.inat == null ? "–" : n(p.A.inat) }]), ev);
+      var rect = svg.getBoundingClientRect(), mx = (ev.clientX - rect.left) * W / rect.width;
+      var k = N === 1 ? 0 : Math.max(0, Math.min(N - 1, Math.round((mx - Lm) / ((W - Lm - Rm) / (N - 1))))), p = pts[k];
+      cross.setAttribute("x1", px(k)); cross.setAttribute("x2", px(k)); cross.setAttribute("visibility", "visible");
+      var rows = [{ color: "var(--accent)", label: "Faltam bloquear", value: n(p.v) }, { label: "Bloqueios marcados no dia", value: n(p.dia) }];
+      if (p.base) {
+        var evb = R.eventos.filter(function (x) { return x.t === p.t; })[0];
+        rows.push({ label: "Base atualizada: lista com", value: n(p.Q) });
+        if (evb && evb.antes != null && evb.inicio !== evb.antes) rows.push({ label: evb.inicio > evb.antes ? "Duplicidades novas na base" : "Saíram com a base nova", value: (evb.inicio > evb.antes ? "+" : "−") + n(Math.abs(evb.inicio - evb.antes)) });
+      }
+      if (p.aprox) rows.push({ label: "Sem o detalhe desta base", value: "só o total" });
+      showTip(new Date(p.t).toLocaleDateString("pt-BR"), rows, ev);
     });
     hit.addEventListener("mouseleave", function () { cross.setAttribute("visibility", "hidden"); hideTip(); });
     svg.appendChild(hit);
     box.appendChild(svg);
   }
+
 
   // ---------- marcações de bloqueio ----------
   // Cada produto marcado fica guardado por empresa + código: { on, d: quando marcou, t: última alteração }.
@@ -516,6 +612,7 @@
       mkTimer = 0;
       if (!ST.cur || !mounted) return;
       renderKpis(); renderProg(); renderTabs(); renderTable(); renderFila(); renderSaveState();
+      if (ST.view === "res") renderEvo();
     }, 16);
   }
   function setMk(v) { ST.mk = v || ""; store("mk", ST.mk); }

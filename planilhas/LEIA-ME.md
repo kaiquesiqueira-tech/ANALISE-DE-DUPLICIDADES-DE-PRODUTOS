@@ -4,6 +4,8 @@ Coloque aqui as exportações do Protheus — **SB1**, **SBZ** e **Saldo Físico
 
 Opcional: a **tabela de NCM** (exportação **mata010**) atualiza a descrição dos NCM. Ela pode vir junto das outras planilhas ou sozinha.
 
+Opcional: a **tabela de grupos de cada empresa**, com **02** ou **10** no nome do arquivo (ex.: `mata010 02.xlsx` e `mata010 10.xlsx`), atualiza a descrição dos grupos. O PUBLICAR confere se os grupos batem com os produtos daquela empresa; se o arquivo estiver trocado, ele avisa e não grava.
+
 - O nome dos arquivos não importa: o PUBLICAR identifica cada planilha sozinho. Pode usar subpastas.
 - Ele calcula a medição no computador, grava o resultado em `dados/` e publica no GitHub.
 - Depois, as planilhas usadas vão para `processadas/<data>/`, para não serem processadas de novo.

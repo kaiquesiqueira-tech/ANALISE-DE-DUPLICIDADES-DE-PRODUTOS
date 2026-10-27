@@ -495,6 +495,40 @@ var DupAnalysis = (function () {
       if (S.emp[IN[i][0]]) { S.emp[IN[i][0]].inat++; S.emp[IN[i][0]].inatMov += mov; }
       (IN[i][7] || []).forEach(function (fi) { var A = S.fil[D.filiais[fi]]; if (A) { A.inat++; A.inatMov += mov; } });
     }
+    // Lista "Bloquear" sem considerar marcações: para cada produto livre, qual similar fica.
+    // Mesma regra da tela: similar em uso fica; se os dois estão livres, fica o de compra mais recente
+    // (senão o código mais antigo). filaKeep[i] = quem fica quando i deve ser bloqueado; -1 = não entra.
+    var deg = new Int32Array(n + 1);
+    for (k = 0; k < pr.length; k += 3) { deg[pr[k]]++; deg[pr[k + 1]]++; }
+    var off = new Int32Array(n + 1);
+    for (i = 0; i < n; i++) off[i + 1] = off[i] + deg[i];
+    var nbA = new Int32Array(off[n]), nbS = new Uint8Array(off[n]), pos = off.slice(0, n);
+    for (k = 0; k < pr.length; k += 3) { var xa = pr[k], xb = pr[k + 1], xs = pr[k + 2]; nbA[pos[xa]] = xb; nbS[pos[xa]++] = xs; nbA[pos[xb]] = xa; nbS[pos[xb]++] = xs; }
+    var filaKeep = new Int32Array(n).fill(-1), filaSc = new Uint8Array(n);
+    S.g.fila = { n: 0 }; BANDS.forEach(function (bd) { S.g.fila[bd.k] = 0; });
+    D.empresas.forEach(function (e) { var f = { n: 0 }; BANDS.forEach(function (bd) { f[bd.k] = 0; }); S.emp[e].fila = f; });
+    for (i = 0; i < n; i++) {
+      if (prot[i]) continue;
+      var kp = -1, kps = -1, ko = -1, kos = -1;
+      for (var q = off[i]; q < off[i + 1]; q++) {
+        var sc = nbS[q], o = nbA[q];
+        if (!bandOf(sc)) continue;
+        if (prot[o] && sc > kps) { kp = o; kps = sc; }
+        if (sc > kos || (sc === kos && prot[o] && !prot[ko])) { ko = o; kos = sc; }
+      }
+      var keep = -1, ksc = 0;
+      if (kp >= 0) { keep = kp; ksc = kps; }
+      else if (ko >= 0) {
+        var ua = D.P[i][6] || "", ub = D.P[ko][6] || "";
+        var fica = ua !== ub ? (ua > ub ? i : ko) : (D.P[i][1] <= D.P[ko][1] ? i : ko);
+        if (fica !== i) { keep = ko; ksc = kos; }
+      }
+      if (keep < 0) continue;
+      filaKeep[i] = keep; filaSc[i] = ksc;
+      var fb = bandOf(ksc) || BANDS[BANDS.length - 1].k, fe = S.emp[D.P[i][0]];
+      S.g.fila.n++; S.g.fila[fb]++;
+      if (fe) { fe.fila.n++; fe.fila[fb]++; }
+    }
     for (k = 0; k < pr.length; k += 3) {
       var pb = bandOf(pr[k + 2]), ea = D.P[pr[k]][0];
       if (!pb) continue;
@@ -506,7 +540,7 @@ var DupAnalysis = (function () {
       });
     }
     return {
-      info: { best: best, bestP: bestP, cnt: cnt, saldo: saldo, prev: prev, pp: pp, prot: prot, cat: cat, band: band },
+      info: { best: best, bestP: bestP, cnt: cnt, saldo: saldo, prev: prev, pp: pp, prot: prot, cat: cat, band: band, filaKeep: filaKeep, filaSc: filaSc },
       inat: { saldo: inSaldo, prev: inPrev, pp: inPP },
       summary: S
     };
