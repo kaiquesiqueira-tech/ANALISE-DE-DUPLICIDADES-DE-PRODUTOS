@@ -69,95 +69,9 @@
     <div class="pager" id="fPager"></div>
   </div>
 
-  <div id="v-res" hidden>
-  <section class="kpis" id="kpis" aria-label="Indicadores"></section>
-  <div class="inat-note" id="inatNote" hidden></div>
-  <div class="inat-note ncm-note" id="ncmNote" hidden></div>
-
-  <section class="panel" id="pProg" hidden>
-    <div class="prog-head">
-      <div class="panel-h">
-        <h2>Andamento dos bloqueios</h2>
-        <p id="progSub"></p>
-      </div>
-      <div class="actions" id="progActions"></div>
-    </div>
-    <div class="prog-body">
-      <div id="progMain"></div>
-      <div id="progStats"></div>
-      <div class="chart" id="progChart"></div>
-    </div>
-  </section>
-
-  <div class="grid-act">
-    <section class="panel" id="pMatrix">
-      <div class="panel-h">
-        <h2>Onde agir</h2>
-        <p>Produtos com similar, pela faixa de semelhança e pela situação. Clique num número para ver os produtos.</p>
-      </div>
-      <div class="mx-wrap" id="matrix"></div>
-      <p class="note">Saldo, previsão de chegada e ponto de pedido são procurados em todas as filiais da empresa, porque o bloqueio do cadastro (SB1) vale para a empresa inteira.</p>
-    </section>
-    <section class="panel" id="pEvo">
-      <div class="panel-h">
-        <h2>Evolução</h2>
-        <p id="evoSub">Produtos com similar, por faixa</p>
-      </div>
-      <div class="legend" id="evoLegend"></div>
-      <div class="chart" id="evoChart"></div>
-      <p class="note" id="evoNote"></p>
-    </section>
-  </div>
-
-  <section class="panel" id="pHist">
-    <div class="panel-h">
-      <h2>Histórico de medições</h2>
-      <p>Cada atualização da base grava um ponto na evolução.</p>
-    </div>
-    <div class="hist" id="hist"></div>
-  </section>
-
-  <details class="method">
-    <summary>Como a similaridade é calculada</summary>
-    <div class="body">
-      <p>A descrição (B1_DESC) de cada produto ativo é comparada com todas as outras da mesma empresa. Antes, saem acentos, pontuação, zeros à esquerda e a ordem das palavras — “FILTRO P551000 DONALDSON” e “FILTRO DONALDSON P551000” ficam iguais.</p>
-      <p>A similaridade é a parte em comum das duas descrições, de 0 a 100%. Quando as duas têm medidas, códigos, tamanhos ou cores e eles são diferentes, a similaridade cai: “BOTINA CA-42374 Nº37” e “Nº38” são produtos diferentes e não entram como duplicidade.</p>
-      <p>Faixas: <strong>95–100%</strong> provável duplicidade · <strong>80–94%</strong> alta semelhança, conferir. Abaixo de 80% o par não aparece.</p>
-      <p><strong>Não bloquear</strong>: o produto tem saldo atual diferente de zero (SB2), previsão de chegada (Qtd. prevista no SB2) ou ponto de pedido (SBZ). <strong>Pode bloquear</strong>: não tem nenhum dos três.</p>
-      <p><strong>Lista Bloquear</strong>: cada produto que deve sair aparece uma vez, com o produto que fica ao lado. Se o similar está em uso, ele fica (são os mais seguros, mostrados primeiro). Se os dois estão livres, fica o de compra mais recente — ou, sem compra, o código mais antigo — e o outro entra na lista. Por isso a lista é menor que “Podem ser bloqueados”: lá os dois produtos de cada par são contados. Para manter o outro, marque o produto sugerido como bloqueado nos detalhes da linha; a lista se ajusta.</p>
-      <p>Inativos: produto da SB1 com <strong>Ativo = N</strong> (ou Bloqueado = Sim, quando a coluna vier na exportação) é tratado como bloqueado e fica fora da análise. O aviso abaixo dos indicadores mostra quantos são e se algum ainda tem movimento.</p>
-      <p>Marcação de bloqueio: a caixa “Bloqueei” de cada produto registra que ele foi bloqueado no Protheus. A marcação vale por empresa e código e continua nas próximas medições. Quando a SB1 nova chega com o produto inativo (Ativo = N), ele conta como <strong>confirmado na base</strong>; se ele foi marcado antes da medição e ainda está ativo, aparece como <strong>a conferir</strong>.</p>
-      <p>NCM: vem do campo Pos.IPI/NCM da SB1 e aparece junto do produto e de cada similar. Quando o produto e o similar têm NCM diferente, o painel avisa — vale conferir qual está certo antes de bloquear, porque o código que fica leva o NCM dele. NCM 0000.00.00 ou vazio conta como “sem NCM”. A descrição de cada NCM vem da tabela de NCM do Protheus (mata010), carregada junto com as planilhas.</p>
-      <p>Grupos: o código do grupo aparece com o zero da frente (0102), como no Protheus, e com a descrição tirada da tabela de grupos de cada empresa. As empresas têm grupos diferentes (o 0102 é FILTROS na 02 e SEMI REBOQUES na 10), por isso cada tabela é guardada separada: a empresa vem do nome do arquivo (“mata010 02.xlsx”, “mata010 10.xlsx”) e o painel confere com os grupos dos produtos — se o nome disser 02 e os grupos forem da 10, nada é gravado.</p>
-      <p>Empresas: a 02 e a 10 têm cada uma o seu cadastro (SB1). O mesmo código pode ter descrições diferentes em cada empresa, então a comparação, o saldo, a previsão e o ponto de pedido são sempre calculados dentro da mesma empresa.</p>
-      <p>Onde ficam os dados: as medições publicadas estão na pasta <code>dados/</code> do repositório. Uma medição salva e ainda não enviada ao GitHub fica só no navegador de quem a gerou. Para atualizar, o jeito mais rápido é colocar as planilhas na pasta <code>planilhas</code> do app e rodar o <code>PUBLICAR.bat</code>: ele calcula a medição no computador e publica só o resultado.</p>
-    </div>
-  </details>
-  </div>
-
-  <div id="v-nb" hidden>
-  <section class="panel" id="pTables">
-    <div class="list-head">
-      <div class="panel-h">
-        <h2>Não bloquear</h2>
-        <p id="tblSub"></p>
-      </div>
-      <div class="tabs" role="tablist" id="tabs"></div>
-    </div>
-    <div class="tools" id="tools">
-      <label class="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input type="search" id="q" placeholder="Buscar código, descrição ou NCM" aria-label="Buscar código, descrição ou NCM"></label>
-      <span id="bandToggles" class="tools"></span>
-      <select id="fSit" aria-label="Situação"></select>
-      <select id="fTipo" aria-label="Tipo de produto"></select>
-      <select id="fNcm" aria-label="NCM" hidden></select>
-      <select id="fMk" aria-label="Marcação de bloqueio" hidden></select>
-      <span class="spacer"></span>
-      <button class="btn small" id="btnCsv" type="button" hidden><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12M6 10l6 6 6-6M4 20h16"/></svg>Exportar Excel</button>
-    </div>
-    <div class="tbl-wrap"><table class="t" id="tbl"></table></div>
-    <div class="pager" id="pager"></div>
-  </section>
-
+  <div id="v-ind" hidden>
+    <p class="ind-sub">Quanto falta bloquear em cada filial. A linha cai na hora a cada bloqueio marcado (não precisa atualizar a base) e sobe quando uma base nova traz duplicidades novas.</p>
+    <div class="ind-grid" id="ind"></div>
   </div>
 </template>
 

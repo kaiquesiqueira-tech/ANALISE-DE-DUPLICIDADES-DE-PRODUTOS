@@ -400,3 +400,17 @@ body { margin: 0; }
 .gh-ok { display: flex; flex-direction: column; gap: 2px; background: color-mix(in srgb, var(--ok) 8%, var(--surface)); border: 1px solid color-mix(in srgb, var(--ok) 35%, var(--line)); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
 .gh-ok strong { color: var(--ok); }
 .drawer button.lnk { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+/* Aba Indicador: um cartão por filial */
+.ind-sub { margin: 0 0 14px; font-size: 13px; color: var(--muted); max-width: 820px; }
+.ind-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 18px; }
+.ind-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px 18px; }
+.ind-head h2 { font-size: 18px; font-weight: 700; margin: 0; }
+.ind-nums { display: flex; gap: 18px; flex-wrap: wrap; }
+.ind-num { display: grid; gap: 1px; text-align: right; }
+.ind-num b { font-size: 20px; font-weight: 800; line-height: 1.1; }
+.ind-num span { font-size: 12px; color: var(--muted); }
+.ind-num.main b { font-size: 28px; color: var(--accent); }
+.ind-num.good b { color: var(--ok, #0c7a0c); }
+.ind-nota { margin: 0; }
+.fp-acts { max-width: 100%; min-width: 0; }
+.fprog .savestate { white-space: normal; }

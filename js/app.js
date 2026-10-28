@@ -177,20 +177,10 @@
     m.textContent = "";
     m.appendChild($("tplMain").content.cloneNode(true));
     mounted = true;
-    $("q").addEventListener("input", debounce(function () { ST.q = $("q").value.trim().toUpperCase(); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); }, 200));
-    $("fSit").addEventListener("change", function () { ST.sit = $("fSit").value; ST.page = 0; refreshFilters(false); });
-    $("fTipo").addEventListener("change", function () { ST.tipo = $("fTipo").value; ST.page = 0; renderTabs(); renderTable(); });
-    $("fNcm").addEventListener("change", function () { ST.ncm = $("fNcm").value; ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); });
-    $("fMk").addEventListener("change", function () { setMk($("fMk").value); ST.page = 0; ST.expanded = null; renderTabs(); renderTable(); });
-    $("btnCsv").addEventListener("click", exportXlsx);
-    $("btnCsv").hidden = false;
     $("fq").addEventListener("input", debounce(function () { ST.fq = $("fq").value.trim().toUpperCase(); ST.fstart = 0; ST.fcong = null; ST.fexp = null; renderFila(); }, 200));
     $("fGrupo").addEventListener("change", function () { ST.fg = $("fGrupo").value; ST.fstart = 0; ST.fcong = null; ST.fexp = null; renderFila(); });
     $("btnFilaXls").addEventListener("click", exportFila);
-    if (window.ResizeObserver) {
-      var ro = new ResizeObserver(debounce(function () { renderCharts(); }, 120));
-      ro.observe($("kpis"));
-    }
+    window.addEventListener("resize", debounce(function () { if (ST.view === "ind") renderIndicador(); }, 150));
   }
   function debounce(fn, ms) { var t; return function () { clearTimeout(t); t = setTimeout(fn, ms); }; }
 
@@ -234,13 +224,7 @@
     renderScope();
     renderViews();
     renderFila();
-    renderKpis();
-    renderProg();
-    renderMatrix();
-    renderCharts();
-    renderTabs();
-    renderTable();
-    renderHist();
+    if (ST.view === "ind") renderIndicador();
     renderSaveState();
   }
   function renderMeta() {
@@ -267,6 +251,7 @@
     return h("div", { cls: "k-delta " + cls, text: sign + (d ? n(Math.abs(d)) + " " : "") + "desde " + dt(prevDoc.at) });
   }
   function renderKpis() {
+    if (!$("kpis")) return;
     var box = $("kpis"); box.textContent = "";
     var A = aggFor(ST.cur.R.summary, ST.scope); if (!A) return;
     var pd = prevDocFor(), PA = aggFor(pd, ST.scope), only = onlyBand(), T = ST.cur.D.T || 80;
@@ -312,6 +297,7 @@
 
   // ---------- onde agir ----------
   function renderMatrix() {
+    if (!$("matrix")) return;
     var box = $("matrix"); box.textContent = "";
     var A = aggFor(ST.cur.R.summary, ST.scope); if (!A) return;
     var keep = SITS.filter(function (x) { return x.grp === "keep"; }), act = SITS.filter(function (x) { return x.grp === "act"; });
@@ -343,7 +329,7 @@
   }
   function refreshFilters(scroll) {
     renderKpis(); renderMatrix(); renderTabs(); renderTable();
-    if (scroll) $("pTables").scrollIntoView({ behavior: "smooth", block: "start" });
+    if (scroll && $("pTables")) $("pTables").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   // ---------- charts ----------
@@ -457,7 +443,8 @@
         } catch (e) { EVO[b.id] = { semDetalhe: true }; }
       }
     } finally { evoCarregando = false; }
-    if (ST.cur && mounted) renderEvo();
+    await null; // redesenha depois de quem chamou terminar (evita desenhar duas vezes por cima)
+    if (ST.cur && mounted && ST.view === "ind") renderIndicador();
   }
   function evoPontos(emp) {
     var bases = evoBases(), all = {}, k;
@@ -499,20 +486,41 @@
     if (a < 0) a = 0;
     return { lo: a, hi: b, step: step };
   }
-  function renderEvo() {
-    var box = $("evoChart"); if (!box) return;
+  function renderEvo() { if (ST.view === "ind") renderIndicador(); }
+  // Aba Indicador: um cartão por filial (02 e 10) com quanto falta bloquear e o gráfico de evolução
+  function renderIndicador() {
+    var host = $("ind"); if (!host || !ST.cur) return;
+    host.textContent = "";
+    evoGarantir(evoBases());
+    var desenhar = []; // primeiro monta todos os cartões, depois desenha (a largura de cada gráfico só fica certa com os dois na tela)
+    ST.cur.D.empresas.forEach(function (e) {
+      var chart = h("div", { cls: "chart" }), nota = h("p", { cls: "note ind-nota" }), nums = h("div", { cls: "ind-nums" });
+      host.appendChild(h("section", { cls: "panel ind-card" }, [
+        h("div", { cls: "ind-head" }, [h("h2", { text: "Filial " + e }), nums]),
+        h("div", { cls: "legend" }, [h("span", null, [h("span", { cls: "sw", style: "height:3px;width:14px;border-radius:2px;background:var(--accent)" }), "Faltam bloquear"]),
+          h("span", null, [h("span", { cls: "sw", style: "height:3px;width:14px;border-radius:2px;background:var(--axis)" }), "Atualização da base"])]),
+        chart, nota]));
+      desenhar.push(function () {
+      var r = desenharEvo(e, chart, nota);
+      if (r) {
+        var num = function (v, l, cls) { return h("div", { cls: "ind-num " + (cls || "") }, [h("b", { cls: "num", text: n(v) }), h("span", { text: l })]); };
+        nums.appendChild(num(r.last.v, "faltam bloquear", "main"));
+        nums.appendChild(num(r.feitos, r.feitos === 1 ? "bloqueado" : "bloqueados", r.feitos ? "good" : ""));
+        nums.appendChild(num(r.hojeN, "hoje", r.hojeN ? "good" : ""));
+      }
+      });
+    });
+    desenhar.forEach(function (f) { f(); });
+  }
+  function desenharEvo(emp, box, notaEl) {
     box.textContent = "";
-    var emp = ST.scope.slice(2), bases = evoBases();
-    evoGarantir(bases);
-    legend("evoLegend", [{ color: "var(--accent)", label: "Faltam bloquear", line: true }, { color: "var(--axis)", label: "Atualização da base", line: true }]);
-    $("evoSub").textContent = "Produtos da lista Bloquear que ainda faltam · " + scopeName(ST.scope) + ". Cai na hora a cada bloqueio marcado (não precisa atualizar a base) e sobe quando uma base nova traz duplicidades novas.";
     var R = evoPontos(emp), pts = R.pts;
-    if (!pts.length) { $("evoNote").textContent = evoCarregando ? "Calculando…" : "Sem dados para " + scopeName(ST.scope) + "."; return; }
+    if (!pts.length) { notaEl.textContent = evoCarregando ? "Calculando…" : "Sem dados para a filial " + emp + "."; return null; }
     var first = pts[0], last = pts[pts.length - 1], subiu = 0, desceu = 0, feitos = 0, hojeN = 0;
     var d0 = new Date(); d0.setHours(0, 0, 0, 0);
     R.eventos.forEach(function (ev) { if (ev.antes == null) return; if (ev.inicio > ev.antes) subiu += ev.inicio - ev.antes; else desceu += ev.antes - ev.inicio; });
     pts.forEach(function (p) { feitos += p.n; if (p.t >= d0.getTime()) hojeN += p.n; });
-    $("evoNote").textContent = "Começou com " + n(first.v) + " em " + dt(first.t) + " · agora faltam " + n(last.v) +
+    notaEl.textContent = "Começou com " + n(first.v) + " em " + dt(first.t) + " · agora faltam " + n(last.v) +
       (last.v !== first.v ? " (" + (last.v < first.v ? "−" : "+") + n(Math.abs(last.v - first.v)) + ")" : "") +
       " · " + n(feitos) + (feitos === 1 ? " bloqueio marcado" : " bloqueios marcados") + (hojeN ? " (" + n(hojeN) + " hoje)" : "") +
       (subiu || desceu ? " · bases novas: " + [subiu ? "+" + n(subiu) + " duplicidades novas" : "", desceu ? "−" + n(desceu) + " que saíram" : ""].filter(Boolean).join(", ") : "") +
@@ -576,6 +584,7 @@
     hit.addEventListener("mouseleave", function () { cross.setAttribute("visibility", "hidden"); hideTip(); });
     svg.appendChild(hit);
     box.appendChild(svg);
+    return { first: first, last: last, feitos: feitos, hojeN: hojeN };
   }
 
 
@@ -604,8 +613,8 @@
     mkTimer = setTimeout(function () {
       mkTimer = 0;
       if (!ST.cur || !mounted) return;
-      renderKpis(); renderProg(); renderTabs(); renderTable(); renderFila(); renderSaveState();
-      if (ST.view === "res") renderEvo();
+      renderFila(); renderSaveState();
+      if (ST.view === "ind") renderIndicador();
     }, 16);
   }
   function setMk(v) { ST.mk = v || ""; store("mk", ST.mk); }
@@ -952,6 +961,7 @@
   function countFor(tab) { return listFor(tab, tab === ST.tab ? ST.sit : "").length; }
 
   function renderTabs() {
+    if (!$("tabs")) return;
     var box = $("tabs"); box.textContent = "";
     TABS.forEach(function (t) {
       box.appendChild(h("button", { cls: "tab", role: "tab", type: "button", "aria-selected": String(ST.tab === t.k), title: t.sub,
@@ -1006,7 +1016,7 @@
   function temTabelaNcm() { return !!(ST.ncmTab && ST.ncmTab.linhas); }
   function aplicarTabelaNcm(t) {
     ST.ncmTab = t && t.m ? t : null;
-    if (ST.cur && mounted) { renderNcmNote(); renderTable(); renderProg(); }
+    if (ST.cur && mounted) { renderFila(); }
   }
 
   // tabelas de grupos: dados/grupos.json no repositório (ou as carregadas neste navegador e ainda não enviadas)
@@ -1098,7 +1108,7 @@
   }
   function aplicarGrupos(mapa) {
     ST.grupos = mapa || {};
-    if (ST.cur && mounted) { renderTable(); renderProg(); }
+    if (ST.cur && mounted) { renderFila(); }
   }
 
   function prodCell(i, compact) {
@@ -1173,8 +1183,7 @@
   // fica o de compra mais recente (senão o código mais antigo).
   var VIEWS = [
     { k: "bloq", label: "Bloquear" },
-    { k: "res", label: "Resumo" },
-    { k: "nb", label: "Não bloquear" }
+    { k: "ind", label: "Indicador" }
   ];
   function decisao(i) {
     var I = ST.cur.R.info;
@@ -1214,20 +1223,19 @@
   function setView(v) {
     ST.view = v; store("view", v); ST.fcong = null;
     renderViews();
-    if (v === "res") { renderKpis(); renderProg(); renderMatrix(); renderCharts(); renderHist(); }
-    if (v === "nb") { renderTabs(); renderTable(); }
+    if (v === "ind") renderIndicador();
     if (v === "bloq") renderFila();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   function renderViews() {
     var nav = $("views"); if (!nav || !ST.cur) return;
+    if (!VIEWS.some(function (v) { return v.k === ST.view; })) ST.view = "bloq";
     nav.textContent = "";
-    var A = aggFor(ST.cur.R.summary, ST.scope) || {}, nb = (A.S || 0) + (A.P || 0) + (A.R || 0);
     VIEWS.forEach(function (v) {
-      nav.appendChild(h("button", { cls: "vtab", type: "button", role: "tab", "aria-selected": String(ST.view === v.k), onclick: function () { if (ST.view !== v.k) setView(v.k); } },
-        [v.label, v.k === "nb" ? h("span", { cls: "cnt", text: n(nb) }) : null]));
+      nav.appendChild(h("button", { cls: "vtab", type: "button", role: "tab", "aria-selected": String(ST.view === v.k), onclick: function () { if (ST.view !== v.k) setView(v.k); } }, [v.label]));
     });
     VIEWS.forEach(function (v) { var el = $("v-" + v.k); if (el) el.hidden = ST.view !== v.k; });
+    var sc = $("scope"); if (sc) sc.hidden = ST.view === "ind"; // no Indicador aparecem as duas filiais
   }
   function goFila(chip) {
     if (chip) ST.fb = chip;
@@ -1237,7 +1245,7 @@
   function goNb(sit, bk, mk) {
     ST.tab = "prod"; store("tab", "prod"); ST.sit = sit == null ? "prot" : sit;
     ST.bands = bk ? onlyOf(bk) : allBands(); setMk(mk || ""); ST.ncm = ""; ST.page = 0; ST.expanded = null;
-    setView("nb");
+    setView("bloq");
   }
 
   function filaChave() { return [ST.scope, ST.fb, ST.fg, ST.fq, ST.fstart].join("|"); }
@@ -1436,6 +1444,7 @@
   }
 
   function renderTable() {
+    if (!$("tbl")) return;
     var tbl = $("tbl"), ae = document.activeElement;
     var keepFocus = MK.refocus || (ae && tbl.contains(ae) && ae.getAttribute("data-mk")) || null;
     tbl.textContent = "";
@@ -1545,6 +1554,7 @@
 
   // ---------- history ----------
   function renderHist() {
+    if (!$("hist")) return;
     var box = $("hist"); box.textContent = "";
     var list = ST.snaps.slice().reverse();
     var locais = ST.snaps.filter(function (x) { return x.origem === "local"; });
