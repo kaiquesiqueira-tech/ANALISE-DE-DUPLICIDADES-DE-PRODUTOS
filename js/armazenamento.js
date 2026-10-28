@@ -94,7 +94,7 @@ var Armazem = (function () {
   // historico.json novo = o que já está no repositório + as medições só deste navegador
   async function historicoParaPublicar() {
     var repo = await doRepositorio(), loc = await doNavegador(), mapa = {};
-    repo.concat(loc).forEach(function (m) { var c = Object.assign({}, m); delete c.origem; mapa[c.id] = c; });
+    repo.concat(loc).forEach(function (m) { var c = Object.assign({}, m); delete c.origem; delete c.enviadaEm; mapa[c.id] = c; });
     return Object.keys(mapa).map(function (k) { return mapa[k]; }).sort(function (a, b) { return a.at < b.at ? -1 : 1; });
   }
 
@@ -164,8 +164,8 @@ var Marcas = (function () {
     return new TextDecoder().decode(b);
   }
   // pedido com tempo limite: se a rede travar, desiste em 20 s e tenta de novo depois
-  function buscar(url, op) {
-    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null, t = ctl ? setTimeout(function () { ctl.abort(); }, 20000) : 0;
+  function buscar(url, op, ms) {
+    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null, t = ctl ? setTimeout(function () { ctl.abort(); }, ms || 20000) : 0;
     return fetch(url, Object.assign({ cache: "no-store" }, op || {}, ctl ? { signal: ctl.signal } : {})).finally(function () { clearTimeout(t); });
   }
   // 403/429 por excesso de pedidos é temporário (o GitHub pede para esperar); 401 e o resto de 403 são da chave
@@ -319,6 +319,45 @@ var Marcas = (function () {
     await atualizar();
     return estado();
   }
+  // Grava vários arquivos no repositório num commit só (API Git do GitHub), com a chave conectada.
+  // montar(ler) devolve [{ caminho, texto }]; ler(caminho) traz o texto atual do arquivo no repositório
+  // (ou null). Se outra pessoa gravar ao mesmo tempo, monta de novo em cima da versão mais nova.
+  async function gravarArquivos(montar, mensagem, aoPasso) {
+    var c = conexao(); if (!c) throw new Error("conecte o GitHub primeiro");
+    var base = API + "/repos/" + encodeURIComponent(c.owner) + "/" + encodeURIComponent(c.repo);
+    var H = Object.assign(cab(c), { "Content-Type": "application/json" });
+    var passo = function (t) { if (aoPasso) aoPasso(t); };
+    async function pedir(url, op, ms) {
+      var r = await buscar(url, Object.assign({ headers: op && op.body ? H : cab(c) }, op || {}), ms);
+      if (!r.ok) throw await erroHttp(r);
+      return r.json();
+    }
+    for (var tent = 0; ; tent++) {
+      passo("Lendo o repositório…");
+      var ref = await pedir(base + "/git/ref/heads/" + encodeURIComponent(c.branch) + "?t=" + Date.now());
+      var cabeca = ref.object.sha, com = await pedir(base + "/git/commits/" + cabeca);
+      var ler = async function (caminho) {
+        var r = await buscar(base + "/contents/" + caminho.split("/").map(encodeURIComponent).join("/") + "?ref=" + cabeca, { headers: cab(c, true) }, 60000);
+        if (r.status === 404) return null;
+        if (!r.ok) throw await erroHttp(r);
+        return r.text();
+      };
+      var arqs = await montar(ler), itens = [];
+      for (var i = 0; i < arqs.length; i++) {
+        passo("Enviando " + arqs[i].caminho.split("/").pop() + "…");
+        var blob = await pedir(base + "/git/blobs", { method: "POST", body: JSON.stringify({ content: arqs[i].texto, encoding: "utf-8" }) }, 180000);
+        itens.push({ path: arqs[i].caminho, mode: "100644", type: "blob", sha: blob.sha });
+      }
+      passo("Gravando…");
+      var arv = await pedir(base + "/git/trees", { method: "POST", body: JSON.stringify({ base_tree: com.tree.sha, tree: itens }) }, 60000);
+      var novo = await pedir(base + "/git/commits", { method: "POST", body: JSON.stringify({ message: mensagem + (c.nome ? " (" + c.nome + ")" : ""), tree: arv.sha, parents: [cabeca] }) }, 60000);
+      var r = await buscar(base + "/git/refs/heads/" + encodeURIComponent(c.branch), { method: "PATCH", headers: H, body: JSON.stringify({ sha: novo.sha, force: false }) }, 60000);
+      if (r.ok) return novo.sha;
+      // outra pessoa gravou no meio (ex.: uma marcação): refaz em cima da versão nova
+      if ((r.status === 422 || r.status === 409) && tent < 4) { await new Promise(function (ok) { setTimeout(ok, 800 + Math.random() * 1200); }); continue; }
+      throw await erroHttp(r);
+    }
+  }
   function desconectar() { try { localStorage.removeItem(CHAVE_GH); } catch (e) { /* nada */ } est.fase = ""; est.erro = ""; mudouEstado(); }
   function estado() {
     var c = conexao();
@@ -328,7 +367,7 @@ var Marcas = (function () {
   function pendentes() { return Object.keys(local).length; }
   function paraPublicar() { return { v: 1, at: new Date().toISOString(), m: juntar() }; }
   return { iniciar: iniciar, salvar: salvar, pendentes: pendentes, paraPublicar: paraPublicar, conectar: conectar, desconectar: desconectar,
-    estado: estado, atualizar: atualizar, enviar: enviar, sincronizar: sincronizar };
+    estado: estado, atualizar: atualizar, enviar: enviar, sincronizar: sincronizar, gravarArquivos: gravarArquivos };
 })();
 
 // ===== Tabela de NCM (descrição de cada código) =====

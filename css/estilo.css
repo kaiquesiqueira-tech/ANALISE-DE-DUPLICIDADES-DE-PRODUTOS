@@ -414,3 +414,24 @@ body { margin: 0; }
 .ind-nota { margin: 0; }
 .fp-acts { max-width: 100%; min-width: 0; }
 .fprog .savestate { white-space: normal; }
+/* Cadastro por data (aba Indicador) */
+/* cor dos gráficos: amarelo bauxita (validado: contraste >= 3:1 no claro e no escuro) */
+:root { --bauxita: #c48a1c; --dt-a: var(--bauxita); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bauxita: #bc8c26; } }
+:root[data-theme="dark"] { --bauxita: #bc8c26; }
+.dt-panel { margin-top: 18px; }
+.dt-ctrl { margin: 0; gap: 10px 16px; }
+.dt-ctrl .fchip { padding: 6px 12px; }
+.dt-lbl { font-size: 12px; font-weight: 600; color: var(--muted); align-self: center; margin-right: 2px; }
+.dt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 18px 24px; }
+.dt-bloco { min-width: 0; display: grid; gap: 8px; align-content: start; }
+.dt-bloco h3 { margin: 0; font-size: 14px; font-weight: 700; }
+/* bloqueado no Protheus: caixa fixa, não dá para desmarcar */
+.fck-prot { cursor: default; }
+.fck-prot .box { background: var(--ok); border-color: var(--ok); }
+.fck-prot .box::after { content: ""; width: 7px; height: 13px; border: solid var(--surface); border-width: 0 3px 3px 0; transform: translateY(-1px) rotate(45deg); }
+.fck-prot:hover .box { border-color: var(--ok); }
+.chart text.dt-val { fill: var(--ink-2); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* marcou: a linha sai da lista na hora */
+.frow.saindo { opacity: 0; transform: translateX(28px); transition: opacity .18s ease, transform .18s ease; pointer-events: none; }
+#fila.fila-trava .frow, #fila.fila-trava .fck { pointer-events: none; }

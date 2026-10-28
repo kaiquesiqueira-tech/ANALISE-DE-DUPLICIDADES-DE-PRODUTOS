@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Duplicidade de Cadastro</title>
+<title>Cadastro de Produto</title>
 <meta name="description" content="Duplicidades de cadastro do Protheus (SB1 × SBZ × SB2): faixas de similaridade, o que não bloquear, status por empresa e evolução.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,10 +11,10 @@
 <link rel="stylesheet" href="css/estilo.css">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#1f5a6b">
-<meta name="application-name" content="Duplicidade">
+<meta name="application-name" content="Cadastro de Produto">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Duplicidade">
+<meta name="apple-mobile-web-app-title" content="Cadastro">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="icon" type="image/png" sizes="32x32" href="icones/favicon-32.png">
 <link rel="apple-touch-icon" href="icones/apple-touch-icon.png">
@@ -25,7 +25,7 @@
     <div class="brand">
       <img class="logo" src="icones/logo.png" alt="" width="60" height="60">
       <div>
-        <h1>Duplicidade de Cadastro</h1>
+        <h1>Cadastro de Produto</h1>
         <div class="meta" id="meta">Carregando a última medição…</div>
       </div>
     </div>
@@ -50,7 +50,7 @@
 
   <div id="main">
     <div class="loading" id="loading">
-      <div class="eyebrow">Duplicidade de Cadastro</div>
+      <div class="eyebrow">Cadastro de Produto</div>
       <div id="loadingText">Buscando a última medição salva…</div>
     </div>
   </div>
@@ -72,6 +72,7 @@
   <div id="v-ind" hidden>
     <p class="ind-sub">Quanto falta bloquear em cada filial. A linha cai na hora a cada bloqueio marcado (não precisa atualizar a base) e sobe quando uma base nova traz duplicidades novas.</p>
     <div class="ind-grid" id="ind"></div>
+    <div id="indDatas"></div>
   </div>
 </template>
 

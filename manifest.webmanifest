@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "Duplicidade de Cadastro",
-  "short_name": "Duplicidade",
+  "name": "Cadastro de Produto",
+  "short_name": "Cadastro",
   "description": "Produtos cadastrados em dobro no Protheus e o que pode ser bloqueado com segurança.",
   "lang": "pt-BR",
   "start_url": "./",
