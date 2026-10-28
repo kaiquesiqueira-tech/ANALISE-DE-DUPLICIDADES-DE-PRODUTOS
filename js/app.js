@@ -142,15 +142,6 @@
     obj.filIndex = {}; obj.D.filiais.forEach(function (f, i) { obj.filIndex[f] = i; });
     obj.keyIdx = {}; obj.D.P.forEach(function (p, i) { obj.keyIdx[p[0] + "|" + p[1]] = i; });
     obj.inKey = {}; obj.D.I.forEach(function (p, i) { obj.inKey[p[0] + "|" + p[1]] = i; });
-    // bloqueados no Protheus (Ativo = N ou vazio): linha no formato de P e similares ativos [índice em P, %]
-    obj.IP = obj.D.I.map(function (p) { return p.slice(0, 9).concat([p[10] || ""]); });
-    obj.inPar = obj.D.I.map(function () { return []; });
-    var pI = obj.D.pairsI || [];
-    for (var q = 0; q < pI.length; q += 3) if (bandOf(pI[q + 2]) && obj.inPar[pI[q]]) obj.inPar[pI[q]].push([pI[q + 1], pI[q + 2]]);
-    obj.inPar.forEach(function (l) { l.sort(function (x, y) { return y[1] - x[1] || (obj.R.info.prot[y[0]] - obj.R.info.prot[x[0]]); }); });
-    // ao contrário: produto ativo → similar bloqueado no Protheus mais parecido [índice em D.I, %]
-    obj.parI = {};
-    for (q = 0; q < pI.length; q += 3) if (bandOf(pI[q + 2]) && (!obj.parI[pI[q + 1]] || obj.parI[pI[q + 1]][1] < pI[q + 2])) obj.parI[pI[q + 1]] = [pI[q], pI[q + 2]];
     if (isPreview) { ST.preview = obj; } else { ST.saved = obj; }
     ST.cur = obj;
     ST.page = 0; ST.expanded = null;
@@ -495,170 +486,6 @@
     if (a < 0) a = 0;
     return { lo: a, hi: b, step: step };
   }
-  // ---------- Cadastro por data: DT Referência (inclusão) e Ult. Revisão (última alteração) ----------
-  var MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
-  var MESES_L = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
-  var DT = (function () { try { var o = JSON.parse(store("datas") || "null"); if (o && o.nivel) return o; } catch (e) { /* padrão */ } return { fil: "all", nivel: "ano", ano: "", mes: "" }; })();
-  var DT_CAMPOS = [
-    { k: "inc", titulo: "Produtos incluídos", coluna: "DT Referenc.", verbo: "incluídos" },
-    { k: "rev", titulo: "Produtos alterados", coluna: "Ult. Revisao", verbo: "com a última alteração" }
-  ];
-  function pad2(x) { return (x < 10 ? "0" : "") + x; }
-  function dtGuardar() { store("datas", JSON.stringify(DT)); }
-  // soma as filiais escolhidas: AAAAMMDD → [ativos, bloqueados]
-  function dtSoma(campo) {
-    var de = ST.cur.D.datas, out = {}, sem = [0, 0], tem = false;
-    if (!de || !de.emp) return null;
-    Object.keys(de.emp).forEach(function (e) {
-      if (DT.fil !== "all" && DT.fil !== e) return;
-      var E = de.emp[e], m = E[campo] || {}, sx = E[campo === "inc" ? "semInc" : "semRev"] || [0, 0];
-      for (var k in m) { var o = out[k] || (out[k] = [0, 0]); o[0] += m[k][0]; o[1] += m[k][1]; tem = true; }
-      sem[0] += sx[0]; sem[1] += sx[1];
-      if (sx[0] || sx[1]) tem = true;
-    });
-    return tem ? { m: out, sem: sem } : { m: {}, sem: sem, semColuna: true };
-  }
-  function dtAnos(somas) {
-    var a = {};
-    somas.forEach(function (S) { if (S) for (var k in S.m) a[k.slice(0, 4)] = 1; });
-    return Object.keys(a).sort();
-  }
-  // barras do nível escolhido: anos com dados; 12 meses do ano; dias do mês
-  function dtBarras(m) {
-    var rows = [], k, r;
-    if (DT.nivel === "ano") {
-      var b = {};
-      for (k in m) { var a = k.slice(0, 4), o = b[a] || (b[a] = [0, 0]); o[0] += m[k][0]; o[1] += m[k][1]; }
-      Object.keys(b).sort().forEach(function (y) { rows.push({ k: y, lab: y, tit: y, v: b[y] }); });
-    } else if (DT.nivel === "mes") {
-      for (var x = 1; x <= 12; x++) rows.push({ k: pad2(x), lab: MESES[x - 1], tit: MESES_L[x - 1] + " de " + DT.ano, v: [0, 0] });
-      for (k in m) if (k.slice(0, 4) === DT.ano) { r = rows[+k.slice(4, 6) - 1]; if (r) { r.v[0] += m[k][0]; r.v[1] += m[k][1]; } }
-    } else {
-      var nd = new Date(+DT.ano, +DT.mes, 0).getDate();
-      for (x = 1; x <= nd; x++) rows.push({ k: pad2(x), lab: String(x), tit: pad2(x) + "/" + DT.mes + "/" + DT.ano, v: [0, 0] });
-      for (k in m) if (k.slice(0, 6) === DT.ano + DT.mes) { r = rows[+k.slice(6, 8) - 1]; if (r) { r.v[0] += m[k][0]; r.v[1] += m[k][1]; } }
-    }
-    return rows;
-  }
-  function dtPeriodo() {
-    return DT.nivel === "ano" ? "em todos os anos" : DT.nivel === "mes" ? "em " + DT.ano : "em " + MESES_L[+DT.mes - 1] + " de " + DT.ano;
-  }
-  function dtIr(nivel, valor) {
-    if (nivel === "mes") { DT.nivel = "mes"; DT.ano = valor; }
-    else if (nivel === "dia") { DT.nivel = "dia"; DT.mes = valor; }
-    else DT.nivel = nivel;
-    dtGuardar(); renderDatas();
-  }
-  function renderDatas() {
-    var host = $("indDatas"); if (!host || !ST.cur) return;
-    host.textContent = "";
-    var emps = ST.cur.D.empresas;
-    if (DT.fil !== "all" && emps.indexOf(DT.fil) < 0) DT.fil = "all";
-    var head = h("div", { cls: "panel-h" }, [h("h2", { text: "Cadastro por data" }),
-      h("p", { text: "Quantos produtos foram incluídos (coluna DT Referenc. da SB1) e quando cada um foi alterado pela última vez (coluna Ult. Revisao). Clique numa barra para abrir o ano ou o mês." })]);
-    var panel = h("section", { cls: "panel dt-panel", "aria-label": "Cadastro por data" }, [head]);
-    host.appendChild(panel);
-    var somas = DT_CAMPOS.map(function (c) { return dtSoma(c.k); });
-    if (!somas[0] && !somas[1]) {
-      panel.appendChild(h("p", { cls: "note", text: "Estes gráficos aparecem a partir da próxima atualização da base: carregue a SB1 (com as colunas DT Referenc. e Ult. Revisao) junto com a SBZ e os saldos, como sempre." }));
-      return;
-    }
-    // filtros: filial · ver por · ano · mês
-    var anos = dtAnos(somas);
-    // padrão: o ano atual (datas no futuro são erro de digitação); no dia, o mês atual ou o último com dados
-    var hoje = new Date(), anoAtual = String(hoje.getFullYear());
-    if (DT.nivel !== "ano" && anos.indexOf(DT.ano) < 0) DT.ano = anos.filter(function (a) { return a <= anoAtual; }).pop() || anos[anos.length - 1] || anoAtual;
-    if (DT.nivel === "dia" && !/^(0[1-9]|1[0-2])$/.test(DT.mes)) {
-      var ms = {};
-      somas.forEach(function (S2) { if (S2) for (var k2 in S2.m) if (k2.slice(0, 4) === DT.ano) ms[k2.slice(4, 6)] = 1; });
-      DT.mes = DT.ano === anoAtual ? pad2(hoje.getMonth() + 1) : (Object.keys(ms).sort().pop() || "01");
-    }
-    var ctrl = h("div", { cls: "ftools dt-ctrl" });
-    function grupo(rotulo, itens, atual, fn) {
-      var g = h("span", { cls: "fchips", role: "group", "aria-label": rotulo }, [h("span", { cls: "dt-lbl", text: rotulo })]);
-      itens.forEach(function (it) {
-        g.appendChild(h("button", { cls: "fchip", type: "button", "aria-pressed": String(atual === it[0]), onclick: function () { if (atual !== it[0]) fn(it[0]); } }, [it[1]]));
-      });
-      ctrl.appendChild(g);
-    }
-    grupo("Filial", [["all", "Todas"]].concat(emps.map(function (e) { return [e, e]; })), DT.fil, function (v) { DT.fil = v; dtGuardar(); renderDatas(); });
-    grupo("Ver por", [["ano", "Ano"], ["mes", "Mês"], ["dia", "Dia"]], DT.nivel, function (v) { if (v === "dia" && DT.nivel !== "dia") DT.mes = ""; dtIr(v); });
-    if (DT.nivel !== "ano") {
-      var sa = h("select", { "aria-label": "Ano" });
-      anos.slice().reverse().forEach(function (a) { sa.appendChild(h("option", { value: a, text: a })); });
-      sa.value = DT.ano;
-      sa.addEventListener("change", function () { DT.ano = sa.value; dtGuardar(); renderDatas(); });
-      ctrl.appendChild(sa);
-    }
-    if (DT.nivel === "dia") {
-      var sm = h("select", { "aria-label": "Mês" });
-      MESES_L.forEach(function (m, x) { sm.appendChild(h("option", { value: pad2(x + 1), text: m.charAt(0).toUpperCase() + m.slice(1) })); });
-      sm.value = DT.mes;
-      sm.addEventListener("change", function () { DT.mes = sm.value; dtGuardar(); renderDatas(); });
-      ctrl.appendChild(sm);
-    }
-    if (DT.nivel !== "ano") ctrl.appendChild(h("button", { cls: "btn small", type: "button", text: DT.nivel === "dia" ? "← Meses de " + DT.ano : "← Todos os anos",
-      onclick: function () { dtIr(DT.nivel === "dia" ? "mes" : "ano", DT.ano); } }));
-    panel.appendChild(ctrl);
-    panel.appendChild(h("div", { cls: "legend" }, [h("span", null, [sw("var(--dt-a)"), "Ativos"]), h("span", null, [sw("var(--dt-b)"), "Bloqueados (Ativo = N ou vazio)"])]));
-    var grid = h("div", { cls: "dt-grid" }), desenhar = [];
-    panel.appendChild(grid);
-    DT_CAMPOS.forEach(function (c, ci) {
-      var S = somas[ci], chart = h("div", { cls: "chart" }), nota = h("p", { cls: "note" });
-      grid.appendChild(h("div", { cls: "dt-bloco" }, [h("h3", { text: c.titulo + " · " + c.coluna }), chart, nota]));
-      if (!S || S.semColuna) { nota.textContent = "A SB1 desta base não tem a coluna " + c.coluna + "."; return; }
-      desenhar.push(function () { dtGrafico(chart, nota, c, S); });
-    });
-    desenhar.forEach(function (f) { f(); });
-  }
-  function dtGrafico(box, nota, campo, S) {
-    var rows = dtBarras(S.m), ta = 0, tb = 0;
-    rows.forEach(function (r) { ta += r.v[0]; tb += r.v[1]; });
-    var sem = S.sem[0] + S.sem[1];
-    nota.textContent = n(ta + tb) + (ta + tb === 1 ? " produto " : " produtos ") + campo.verbo + " " + dtPeriodo() + " · " + n(ta) + (ta === 1 ? " ativo · " : " ativos · ") + n(tb) + (tb === 1 ? " bloqueado" : " bloqueados") +
-      (DT.nivel === "ano" && sem ? " · " + n(sem) + " sem data" : "");
-    box.textContent = "";
-    if (!rows.length) { box.appendChild(h("p", { cls: "note", text: "Sem datas." })); return; }
-    var max = 0; rows.forEach(function (r) { max = Math.max(max, r.v[0] + r.v[1]); });
-    var ax = niceAxis(Math.max(max, 1));
-    var W = Math.max(280, box.clientWidth || 600), H = 220, Lm = 46, Rm = 8, T = 10, B = 24;
-    var plotW = W - Lm - Rm, slot = plotW / rows.length, bw = Math.max(2, Math.min(24, slot * 0.7));
-    var py = function (v) { return T + (H - T - B) * (1 - v / ax.max); };
-    var svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img", "aria-label": campo.titulo + " " + dtPeriodo() });
-    for (var tv = 0; tv <= ax.max + 1e-9; tv += ax.step) {
-      svg.appendChild(s("line", { x1: Lm, x2: W - Rm, y1: py(tv), y2: py(tv), class: tv === 0 ? "base" : "grid" }));
-      svg.appendChild(s("text", { x: Lm - 8, y: py(tv) + 4, "text-anchor": "end", class: "tick" }, NF.format(tv)));
-    }
-    var minLab = DT.nivel === "ano" ? 38 : DT.nivel === "mes" ? 30 : 22, cada = Math.max(1, Math.ceil(minLab / slot));
-    var drill = DT.nivel === "ano" ? "mes" : DT.nivel === "mes" ? "dia" : null;
-    var y0 = py(0);
-    rows.forEach(function (r, x) {
-      var cx = Lm + slot * (x + 0.5), X = cx - bw / 2, a = r.v[0], b = r.v[1];
-      var hl = s("rect", { x: Lm + slot * x, y: T, width: slot, height: H - T - B, fill: "var(--surface-2)", opacity: 0 });
-      svg.appendChild(hl);
-      var ya = py(a), yt = py(a + b), gap = a && b ? 2 : 0;
-      // ativos embaixo (base reta); bloqueados em cima; ponta arredondada só no topo da coluna
-      if (a) svg.appendChild(s("path", { d: colPath(X, ya, bw, y0 - ya, !b), fill: "var(--dt-a)" }));
-      if (b) { var hb = Math.max(0, ya - gap - yt); if (hb > 0.5 || !a) svg.appendChild(s("path", { d: colPath(X, yt, bw, Math.max(hb, 1), true), fill: "var(--dt-b)" })); }
-      if (x % cada === 0) svg.appendChild(s("text", { x: cx, y: H - 7, "text-anchor": "middle", class: "tick" }, r.lab));
-      var hit = s("rect", { x: Lm + slot * x, y: 0, width: slot, height: H, fill: "transparent", style: drill && a + b ? "cursor:pointer" : "" });
-      hit.addEventListener("mousemove", function (ev) {
-        hl.setAttribute("opacity", 1);
-        showTip(r.tit, [{ color: "var(--dt-a)", label: "Ativos", value: n(a) }, { color: "var(--dt-b)", label: "Bloqueados", value: n(b) }, { label: "Total", value: n(a + b) }]
-          .concat(drill && a + b ? [{ label: "Clique para abrir", value: drill === "mes" ? "meses" : "dias" }] : []), ev);
-      });
-      hit.addEventListener("mouseleave", function () { hl.setAttribute("opacity", 0); hideTip(); });
-      if (drill) hit.addEventListener("click", function () { if (!(a + b)) return; hideTip(); dtIr(drill, r.k); });
-      svg.appendChild(hit);
-    });
-    box.appendChild(svg);
-  }
-  // coluna com cantos de 4px só no topo (quando é a ponta da coluna)
-  function colPath(x, y, w, hgt, ponta) {
-    var r = ponta ? Math.min(4, w / 2, hgt) : 0;
-    return "M" + x + "," + (y + hgt) + "V" + (y + r) + (r ? "Q" + x + "," + y + " " + (x + r) + "," + y : "") +
-      "H" + (x + w - r) + (r ? "Q" + (x + w) + "," + y + " " + (x + w) + "," + (y + r) : "") + "V" + (y + hgt) + "Z";
-  }
   function renderEvo() { if (ST.view === "ind") renderIndicador(); }
   // Aba Indicador: um cartão por filial (02 e 10) com quanto falta bloquear e o gráfico de evolução
   function renderIndicador() {
@@ -678,14 +505,12 @@
       if (r) {
         var num = function (v, l, cls) { return h("div", { cls: "ind-num " + (cls || "") }, [h("b", { cls: "num", text: n(v) }), h("span", { text: l })]); };
         nums.appendChild(num(r.last.v, "faltam bloquear", "main"));
-        var nb = filaDados(e).feitos.length;
-        nums.appendChild(num(nb, nb === 1 ? "bloqueado" : "bloqueados", nb ? "good" : ""));
+        nums.appendChild(num(r.feitos, r.feitos === 1 ? "bloqueado" : "bloqueados", r.feitos ? "good" : ""));
         nums.appendChild(num(r.hojeN, "hoje", r.hojeN ? "good" : ""));
       }
       });
     });
     desenhar.forEach(function (f) { f(); });
-    renderDatas();
   }
   function desenharEvo(emp, box, notaEl) {
     box.textContent = "";
@@ -697,7 +522,7 @@
     pts.forEach(function (p) { feitos += p.n; if (p.t >= d0.getTime()) hojeN += p.n; });
     notaEl.textContent = "Começou com " + n(first.v) + " em " + dt(first.t) + " · agora faltam " + n(last.v) +
       (last.v !== first.v ? " (" + (last.v < first.v ? "−" : "+") + n(Math.abs(last.v - first.v)) + ")" : "") +
-      " · " + n(feitos) + (feitos === 1 ? " marcado no app" : " marcados no app") + (hojeN ? " (" + n(hojeN) + " hoje)" : "") +
+      " · " + n(feitos) + (feitos === 1 ? " bloqueio marcado" : " bloqueios marcados") + (hojeN ? " (" + n(hojeN) + " hoje)" : "") +
       (subiu || desceu ? " · bases novas: " + [subiu ? "+" + n(subiu) + " duplicidades novas" : "", desceu ? "−" + n(desceu) + " que saíram" : ""].filter(Boolean).join(", ") : "") +
       (evoCarregando ? " · calculando as bases anteriores…" : "");
     var lo = Infinity, hi = -Infinity;
@@ -773,11 +598,7 @@
     var k = mkKey(emp, cod), e = Object.prototype.hasOwnProperty.call(MK.local, k) ? MK.local[k] : MK.server[k];
     return e && e.on ? e : null;
   }
-  // linha do produto: i >= 0 em P (ativos); i < 0 = bloqueado no Protheus (D.I[-i - 1])
-  function prow(i) { return i >= 0 ? ST.cur.D.P[i] : ST.cur.IP[-i - 1]; }
-  function mkOf(i) { var p = prow(i); return mkEntry(p[0], p[1]); }
-  function inatMotivo(i) { var r = ST.cur.D.I[-i - 1]; return (r && r[9]) || "Ativo = N"; }
-  function inatUso(i) { var A = ST.cur.R.inat, j = -i - 1; return !!A && (A.saldo[j] !== 0 || A.prev[j] > 0 || A.pp[j] > 0); }
+  function mkOf(i) { var p = ST.cur.D.P[i]; return mkEntry(p[0], p[1]); }
   function mkWhen(e) { return e.d || e.t; }
   // marcado antes desta medição e ainda ativo na SB1 = conferir no Protheus
   function mkConf(i) { var e = mkOf(i); return !!e && mkWhen(e) < ST.cur.D.at; }
@@ -1272,15 +1093,15 @@
   }
 
   // ---------- grupos de produto (descrição por empresa) ----------
-  function grupoCod(i) { return DupAnalysis.normGrupo(prow(i)[4]); }
+  function grupoCod(i) { return DupAnalysis.normGrupo(ST.cur.D.P[i][4]); }
   function grupoDesc(emp, g) { var t = ST.grupos && ST.grupos[emp]; return (g && t && t.m && t.m[g]) || ""; }
   function temGrupos() { return !!(ST.grupos && Object.keys(ST.grupos).length); }
   function grupoTexto(i, comCodigo) {
-    var p = prow(i), g = grupoCod(i), d = grupoDesc(p[0], g);
+    var p = ST.cur.D.P[i], g = grupoCod(i), d = grupoDesc(p[0], g);
     return g ? (comCodigo === false ? d : g + (d ? " – " + d : "")) : "";
   }
   function grupoTitulo(i) {
-    var p = prow(i), g = grupoCod(i); if (!g) return "";
+    var p = ST.cur.D.P[i], g = grupoCod(i); if (!g) return "";
     var cat = g.length > 2 ? grupoDesc(p[0], g.slice(0, 2)) : "", d = grupoDesc(p[0], g);
     if (!d) return "Grupo " + g + (temGrupos() ? " — sem descrição na tabela de grupos da empresa " + p[0] : "");
     return (cat ? "Categoria " + g.slice(0, 2) + " " + cat + " › " : "") + "Grupo " + g + " " + d + " (empresa " + p[0] + ")";
@@ -1376,35 +1197,17 @@
     return { tipo: "bloquear", keep: other, emUso: false, sc: open[0][1] };
   }
   // Todos os itens da empresa atual: {pend: [...], feitos: [...]}
-  function filaDados(emp) {
-    var P = ST.cur.D.P, pend = [], feitos = [], I = ST.cur.R.info;
-    emp = emp || ST.scope.slice(2);
+  function filaDados() {
+    var P = ST.cur.D.P, emp = ST.scope.slice(2), pend = [], feitos = [], I = ST.cur.R.info;
     for (var i = 0; i < P.length; i++) {
       if (P[i][0] !== emp) continue;
       var d = decisao(i);
       if (d.tipo === "bloquear") pend.push({ i: i, keep: d.keep, emUso: d.emUso, sc: d.sc, band: bandOf(d.sc) || "b80" });
-      else if (d.tipo === "feito") {
-        var fx = { i: i, keep: I.bestP[i], emUso: I.bestP[i] >= 0 && !!I.prot[I.bestP[i]], sc: I.best[i], band: bandOf(I.best[i]) || "b80", feito: true };
-        // marcado no app, mas o único similar já está bloqueado no Protheus: mostra esse similar
-        var pz = fx.keep < 0 && ST.cur.parI ? ST.cur.parI[i] : null;
-        if (pz) { fx.keepI = pz[0]; fx.sc = pz[1]; fx.band = bandOf(pz[1]) || "b80"; }
-        feitos.push(fx);
-      }
-    }
-    // bloqueados no Protheus (Ativo = N ou vazio na SB1 da base) que têm similar ativo
-    var IP = ST.cur.IP || [], inPar = ST.cur.inPar || [];
-    for (var j = 0; j < IP.length; j++) {
-      if (IP[j][0] !== emp || !inPar[j] || !inPar[j].length) continue;
-      var bp = inPar[j][0];
-      feitos.push({ i: -j - 1, keep: bp[0], emUso: !!I.prot[bp[0]], sc: bp[1], band: bandOf(bp[1]) || "b80", feito: true, protheus: true });
+      else if (d.tipo === "feito") feitos.push({ i: i, keep: I.bestP[i], emUso: I.bestP[i] >= 0 && !!I.prot[I.bestP[i]], sc: I.best[i], band: bandOf(I.best[i]) || "b80", feito: true });
     }
     var ord = function (a, b) { return (b.emUso - a.emUso) || (b.sc - a.sc) || (P[a.i][1] < P[b.i][1] ? -1 : 1); };
     pend.sort(ord);
-    feitos.sort(function (a, b) {
-      if (!a.protheus !== !b.protheus) return a.protheus ? 1 : -1; // marcados no app primeiro (dá para desmarcar)
-      if (a.protheus) return (b.sc - a.sc) || (prow(a.i)[1] < prow(b.i)[1] ? -1 : 1);
-      return mkWhen(mkOf(b.i)) < mkWhen(mkOf(a.i)) ? -1 : 1;
-    });
+    feitos.sort(function (a, b) { return mkWhen(mkOf(b.i)) < mkWhen(mkOf(a.i)) ? -1 : 1; });
     return { pend: pend, feitos: feitos };
   }
   function filaFiltrada(F) {
@@ -1413,7 +1216,7 @@
     return base.filter(function (x) {
       if (g && grupoCod(x.i) !== g) return false;
       if (!q) return true;
-      var a = prow(x.i), b = x.keep >= 0 ? P[x.keep] : null;
+      var a = P[x.i], b = x.keep >= 0 ? P[x.keep] : null;
       return a[1].indexOf(q) >= 0 || a[2].indexOf(q) >= 0 || (b && (b[1].indexOf(q) >= 0 || b[2].indexOf(q) >= 0));
     });
   }
@@ -1485,7 +1288,7 @@
     }
     chip("b95", "95–100%", cnt.b95);
     chip("b80", "80–94%", cnt.b80);
-    if (MK.on || F.feitos.length) chip("feito", "Já bloqueados", F.feitos.length);
+    if (MK.on) chip("feito", "Já bloqueados", F.feitos.length);
     // grupos (da faixa escolhida)
     var base = ST.fb === "feito" ? F.feitos : F.pend.filter(function (x) { return x.band === ST.fb; });
     var gc = {};
@@ -1504,7 +1307,7 @@
     var chave = filaChave(), slice;
     if (ST.fcong && ST.fcong.chave === chave) {
       // página "congelada": depois de marcar, as linhas ficam no lugar (nada anda debaixo do mouse)
-      slice = ST.fcong.itens.map(function (i0) { var x = Object.assign({}, ST.fcong.snap[i0]); x.feito = i0 < 0 || !!mkOf(i0); return x; });
+      slice = ST.fcong.itens.map(function (i0) { var x = Object.assign({}, ST.fcong.snap[i0]); x.feito = !!mkOf(i0); return x; });
     } else {
       ST.fcong = null;
       slice = list.slice(ST.fstart, ST.fstart + PAGE);
@@ -1514,22 +1317,21 @@
     if (ae && box.contains(ae) && ae.type === "checkbox") aePos = Array.prototype.indexOf.call(box.querySelectorAll(".frow input[type=checkbox]"), ae);
     box.textContent = "";
     var sec = null;
-    var secOf = function (y) { return ST.fb === "feito" ? (y.protheus ? "protheus" : "feito") : y.emUso ? "uso" : "livre"; };
-    var SECS = { uso: "Mais seguros: o produto que fica está em uso", livre: "Nenhum dos dois em uso: fica o de compra mais recente",
-      feito: "Marcados no app — desmarque se marcou por engano", protheus: "Bloqueados no Protheus (Ativo = N ou vazio na SB1 da base de " + dt(ST.cur.D.at) + ")" };
     slice.forEach(function (x, pos) {
-      var s = secOf(x);
+      var s = ST.fb === "feito" ? "feito" : x.emUso ? "uso" : "livre";
       if (s !== sec) {
         sec = s;
-        var nSec = list.filter(function (y) { return secOf(y) === s; }).length;
-        box.appendChild(h("div", { cls: "fsec" }, [h("span", { text: SECS[s] }), h("span", { cls: "num", text: n(nSec) })]));
+        var nSec = list.filter(function (y) { return (ST.fb === "feito" ? "feito" : y.emUso ? "uso" : "livre") === s; }).length;
+        box.appendChild(h("div", { cls: "fsec" }, [
+          h("span", { text: s === "uso" ? "Mais seguros: o produto que fica está em uso" : s === "livre" ? "Nenhum dos dois em uso: fica o de compra mais recente" : "Marcados como bloqueados — desmarque se marcou por engano" }),
+          h("span", { cls: "num", text: n(nSec) })]));
       }
       box.appendChild(filaLinha(x, pos));
       if (ST.fexp === x.i) box.appendChild(filaDetalhe(x));
     });
     if (!slice.length) {
       var vazio = ST.fq || ST.fg ? "Nenhum produto com estes filtros."
-        : ST.fb === "feito" ? "Nenhum produto bloqueado nesta empresa ainda."
+        : ST.fb === "feito" ? "Nenhum produto marcado como bloqueado nesta empresa ainda."
         : "Nada para bloquear nesta faixa. " + (ST.fb === "b95" && cnt.b80 ? "Veja a faixa 80–94%." : "");
       box.appendChild(h("div", { cls: "fvazio", text: vazio }));
     }
@@ -1550,7 +1352,7 @@
     ST.ffocus = null;
   }
   function compraTxt(i) {
-    var u = prow(i)[6];
+    var u = ST.cur.D.P[i][6];
     return u ? "última compra " + u.slice(8, 10) + "/" + u.slice(5, 7) + "/" + u.slice(0, 4) : "nunca comprado";
   }
   function usoTxt(i) {
@@ -1560,62 +1362,55 @@
     if (I.pp[i] > 0) t.push("ponto de pedido " + QF.format(I.pp[i]));
     return t.join(" · ");
   }
-  function filaLado(i, papel, extra, cls, rotulo) {
-    var p = prow(i), gt = grupoTexto(i), nc = temNcm() ? p[9] : "";
+  function filaLado(i, papel, extra, cls) {
+    var p = ST.cur.D.P[i], gt = grupoTexto(i), nc = temNcm() ? p[9] : "";
     var nd = nc ? ncmDesc(nc) : "", sub = [gt, nc ? "NCM " + nc + (nd ? " – " + nd : "") : ""].filter(Boolean).join(" · ");
     return h("div", { cls: "fside " + papel }, [
-      h("small", { text: rotulo || (papel === "b" ? "Bloquear" : papel === "k" ? "Manter" : "Bloqueado") }),
+      h("small", { text: papel === "b" ? "Bloquear" : papel === "k" ? "Manter" : "Bloqueado" }),
       h("div", { cls: "fname" }, [h("span", { cls: "p-cod", text: p[1] }), h("span", { cls: "p-desc", text: p[2] })]),
       sub ? h("div", { cls: "fsub", title: grupoTitulo(i) + (nc && ncmDesc(nc) ? " · NCM " + nc + " " + ncmDesc(nc) : ""), text: sub }) : null,
       extra ? h("div", { cls: cls || "fsub", text: extra }) : null]);
   }
   function filaLinha(x, pos) {
-    var P = ST.cur.D.P, i = x.i, k = x.keep, aberto = ST.fexp === i, avisos = [], pi = prow(i);
-    if (k >= 0 && temNcm() && pi[9] && P[k][9] && pi[9] !== P[k][9])
-      avisos.push(["NCM diferente: " + pi[9] + " × " + P[k][9], "NCM do que sai: " + pi[9] + (ncmDesc(pi[9]) ? " " + ncmDesc(pi[9]) : "") + " · NCM do que fica: " + P[k][9] + (ncmDesc(P[k][9]) ? " " + ncmDesc(P[k][9]) : "") + ". Confira qual está certo antes de bloquear: o código que fica leva o NCM dele."]);
+    var P = ST.cur.D.P, i = x.i, k = x.keep, aberto = ST.fexp === i, avisos = [];
+    if (k >= 0 && temNcm() && P[i][9] && P[k][9] && P[i][9] !== P[k][9])
+      avisos.push(["NCM diferente: " + P[i][9] + " × " + P[k][9], "NCM do que sai: " + P[i][9] + (ncmDesc(P[i][9]) ? " " + ncmDesc(P[i][9]) : "") + " · NCM do que fica: " + P[k][9] + (ncmDesc(P[k][9]) ? " " + ncmDesc(P[k][9]) : "") + ". Confira qual está certo antes de bloquear: o código que fica leva o NCM dele."]);
     var gi = grupoCod(i), gk = k >= 0 ? grupoCod(k) : "";
     if (gi && gk && gi !== gk) avisos.push(["Grupo diferente: " + gi + " × " + gk, "Grupo do que sai: " + grupoTexto(i) + " · grupo do que fica: " + grupoTexto(k) + "."]);
     if (x.feito && k >= 0 && mkOf(k)) avisos.push(["O similar " + P[k][1] + " também foi marcado", "Confira se um deles fica ativo no Protheus."]);
-    if (x.keepI != null) avisos.push(["O similar " + ST.cur.IP[x.keepI][1] + " já está bloqueado no Protheus", "Os dois ficaram bloqueados. Confira se um deles deveria continuar ativo."]);
-    if (x.feito && !x.protheus && ST.cur.R.info.prot[i]) avisos.push(["Tem saldo, previsão ou ponto de pedido", "Este produto está em uso; confira antes de bloquear."]);
-    if (x.protheus && inatUso(i)) avisos.push(["Ainda tem saldo, previsão ou ponto de pedido", "Está bloqueado no Protheus, mas a base ainda mostra saldo, previsão de chegada ou ponto de pedido dele."]);
-    var mkI = x.protheus ? mkOf(i) : null, motivo = x.protheus ? inatMotivo(i) : "";
-    var cb = x.protheus ? h("div", { cls: "fck fck-prot", title: "Bloqueado no Protheus: " + motivo + " na SB1 da base de " + dt(ST.cur.D.at) + ". Não precisa marcar." },
-        [h("span", { cls: "box", "aria-hidden": "true" }), h("span", { cls: "fck-l", text: "Protheus" })]) : h("label", { cls: "fck", title: x.feito ? "Desmarcar" : "Marque depois de bloquear no Protheus", onclick: function (ev) { ev.stopPropagation(); } }, [
+    if (x.feito && ST.cur.R.info.prot[i]) avisos.push(["Tem saldo, previsão ou ponto de pedido", "Este produto está em uso; confira antes de bloquear."]);
+    var cb = h("label", { cls: "fck", title: x.feito ? "Desmarcar" : "Marque depois de bloquear no Protheus", onclick: function (ev) { ev.stopPropagation(); } }, [
       (function () {
-        var inp = h("input", { type: "checkbox", disabled: MK.readonly || !MK.on, "aria-label": (x.feito ? "Desmarcar " : "Bloqueei ") + pi[1] + " " + pi[2] });
+        var inp = h("input", { type: "checkbox", disabled: MK.readonly || !MK.on, "aria-label": (x.feito ? "Desmarcar " : "Bloqueei ") + P[i][1] + " " + P[i][2] });
         inp.checked = !!x.feito;
         inp.addEventListener("change", function () { congelarFila(); ST.ffocus = inp.checked ? pos + 1 : pos; setMarks([i], inp.checked); });
         return inp;
       })(),
       h("span", { cls: "box", "aria-hidden": "true" }),
       h("span", { cls: "fck-l", text: x.feito ? "Bloqueado" : "Bloqueei" })]);
-    var esq = x.protheus
-      ? filaLado(i, "f", motivo + " na SB1" + (mkI ? " · marcado no app em " + dt(mkWhen(mkI), true) : ""), null, "Bloqueado no Protheus")
-      : filaLado(i, x.feito ? "f" : "b", x.feito ? "marcado em " + dt(mkWhen(mkOf(i)), true) : x.emUso ? null : compraTxt(i));
-    var dir = k >= 0 ? filaLado(k, "k", x.emUso ? "em uso: " + usoTxt(k) : compraTxt(k), "fwhy", x.protheus ? "Similar ativo" : null)
-      : x.keepI != null ? filaLado(-x.keepI - 1, "k", inatMotivo(-x.keepI - 1) + " na SB1", null, "Similar bloqueado no Protheus") : h("div");
+    var esq = filaLado(i, x.feito ? "f" : "b", x.feito ? "marcado em " + dt(mkWhen(mkOf(i)), true) : x.emUso ? null : compraTxt(i));
+    var dir = k >= 0 ? filaLado(k, "k", x.emUso ? "em uso: " + usoTxt(k) : compraTxt(k), "fwhy") : h("div");
     var row = h("div", { cls: "frow" + (aberto ? " open" : "") + (x.feito ? " done" : ""), tabindex: "0", "aria-expanded": String(aberto),
       title: "Clique para ver todos os similares",
       onclick: function () { ST.fexp = aberto ? null : i; renderFila(); },
       onkeydown: function (ev) { if (ev.target !== ev.currentTarget) return; if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ST.fexp = aberto ? null : i; renderFila(); } } },
-      [MK.on || x.protheus ? cb : h("div"), esq, h("div", { cls: "farrow", "aria-hidden": "true", text: "→" }), dir, h("div", { cls: "fpct " + x.band, text: x.sc + "%" }),
+      [MK.on ? cb : h("div"), esq, h("div", { cls: "farrow", "aria-hidden": "true", text: "→" }), dir, h("div", { cls: "fpct " + x.band, text: x.sc + "%" }),
         avisos.length ? h("div", { cls: "favisos" }, avisos.map(function (a) { return h("span", { cls: "faviso", title: a[1], text: "⚠ " + a[0] }); })) : null]);
     return row;
   }
   function filaDetalhe(x) {
     congelarFila();
-    var i = x.i, pi = prow(i), all = i < 0 ? (ST.cur.inPar[-i - 1] || []) : neighbors(i), nbs = all.slice(0, 40), mkOn = MK.on;
+    var P = ST.cur.D.P, i = x.i, all = neighbors(i), nbs = all.slice(0, 40), mkOn = MK.on;
     var sims = h("div", { cls: "sims" }, nbs.map(function (y) {
       var dn = mkOn && !!mkOf(y[0]);
       return h("div", { cls: "s" + (mkOn ? " with-mk" : "") + (dn ? " is-done" : "") }, (mkOn ? [h("div", null, [mkBox(y[0])])] : []).concat([
         h("div", null, [scorePill(y[1])]),
-        h("div", null, [prodCell(y[0], false), statusTags(y[0], true), y[0] === x.keep && !x.protheus ? h("span", { cls: "p-meta keep-tag", text: "← sugestão: este fica" }) : null,
+        h("div", null, [prodCell(y[0], false), statusTags(y[0], true), y[0] === x.keep ? h("span", { cls: "p-meta keep-tag", text: "← sugestão: este fica" }) : null,
           dn ? h("span", { cls: "p-meta mk-ok", text: "Marcado como bloqueado em " + dt(mkWhen(mkOf(y[0])), true) }) : null])]));
     }));
-    var kids = [h("div", { cls: "eyebrow", style: "margin-bottom:8px", text: (i < 0 ? "Similares ativos de " : "Similares de ") + pi[1] + " · " + pi[2] })];
+    var kids = [h("div", { cls: "eyebrow", style: "margin-bottom:8px", text: "Similares de " + P[i][1] + " · " + P[i][2] })];
     if (!x.feito && !x.emUso && x.keep >= 0)
-      kids.push(h("p", { cls: "note", style: "margin:0 0 10px", text: "Prefere manter o " + pi[1] + "? Bloqueie o " + ST.cur.D.P[x.keep][1] + " no Protheus e marque a caixa dele aqui embaixo — a lista se ajusta sozinha." }));
+      kids.push(h("p", { cls: "note", style: "margin:0 0 10px", text: "Prefere manter o " + P[i][1] + "? Bloqueie o " + P[x.keep][1] + " no Protheus e marque a caixa dele aqui embaixo — a lista se ajusta sozinha." }));
     kids.push(sims);
     if (all.length > 40) kids.push(h("p", { cls: "note", text: "Mostrando os 40 mais parecidos de " + n(all.length) + "." }));
     return h("div", { cls: "fdet" }, kids);
@@ -1628,17 +1423,17 @@
     try {
       var P = ST.cur.D.P, list = filaFiltrada(filaDados()), I = ST.cur.R.info;
       var headers = ["Empresa", "Bloquear: código", "Bloquear: descrição", "Grupo", "Descrição do grupo", "NCM", "Descrição do NCM", "Última compra",
-        "Manter: código", "Manter: descrição", "Grupo (manter)", "NCM (manter)", "Descrição do NCM (manter)", "Por que manter", "Semelhança %", "Avisos", "Bloqueado no Protheus", "Bloqueado no app", "Marcado em"];
+        "Manter: código", "Manter: descrição", "Grupo (manter)", "NCM (manter)", "Descrição do NCM (manter)", "Por que manter", "Semelhança %", "Avisos", "Bloqueado no app", "Marcado em"];
       var rows = list.map(function (x) {
-        var i = x.i, k = x.keep, av = [], pi = prow(i);
-        if (k >= 0 && pi[9] && P[k][9] && pi[9] !== P[k][9]) av.push("NCM diferente");
+        var i = x.i, k = x.keep, av = [];
+        if (k >= 0 && P[i][9] && P[k][9] && P[i][9] !== P[k][9]) av.push("NCM diferente");
         if (k >= 0 && grupoCod(i) && grupoCod(k) && grupoCod(i) !== grupoCod(k)) av.push("Grupo diferente");
         var e = mkOf(i);
-        return [pi[0], pi[1], pi[2], grupoCod(i), grupoTexto(i, false), pi[9] || "", ncmDesc(pi[9]), pi[6] || "",
+        return [P[i][0], P[i][1], P[i][2], grupoCod(i), grupoTexto(i, false), P[i][9] || "", ncmDesc(P[i][9]), P[i][6] || "",
           k >= 0 ? P[k][1] : "", k >= 0 ? P[k][2] : "", k >= 0 ? grupoTexto(k) : "", k >= 0 ? (P[k][9] || "") : "", k >= 0 ? ncmDesc(P[k][9]) : "",
-          k < 0 ? "" : I.prot[k] ? "Em uso: " + usoTxt(k) : compraTxt(k), x.sc, av.join(" · "), x.protheus ? "Sim (" + inatMotivo(i) + ")" : "Não", e ? "Sim" : "Não", e ? dt(mkWhen(e), true) : ""];
+          k < 0 ? "" : I.prot[k] ? "Em uso: " + usoTxt(k) : compraTxt(k), x.sc, av.join(" · "), e ? "Sim" : "Não", e ? dt(mkWhen(e), true) : ""];
       });
-      var nome = { b95: "95-100", b80: "80-94", feito: "ja_bloqueados" }[ST.fb] || "lista";
+      var nome = { b95: "95-100", b80: "80-94", feito: "ja_marcados" }[ST.fb] || "lista";
       var blob = await XlsxWriter.build({ sheet: "Bloquear", headers: headers, rows: rows });
       await salvarArquivo("bloquear_" + nome + "_empresa" + ST.scope.slice(2) + "_" + ST.cur.D.at.slice(0, 10) + ".xlsx", blob);
       btn.innerHTML = label;
