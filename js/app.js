@@ -91,6 +91,7 @@
     MarkStore.start();
     NcmStore.start();
     GruposStore.start();
+    InicioStore.start();
     // gráficos de data: dados/datas.json (gravado pelo PUBLICAR com a SB1 da pasta planilhas)
     fetch("dados/datas.json", { cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
       if (j && j.emp) { ST.datasArq = j; if (ST.cur && mounted && ST.view === "ind") renderDatas(); }
@@ -442,6 +443,7 @@
     var bs = ST.snaps.filter(function (d) { return (d.T || 70) === T; }).map(function (d) { return { id: d.id, at: d.at, doc: d }; });
     if (ST.preview) bs.push({ id: "previa:" + ST.cur.D.at, at: ST.cur.D.at, doc: null, previa: true });
     bs.sort(function (a, b) { return a.at < b.at ? -1 : 1; });
+    if (ST.inicio) { var ib = -1; bs.forEach(function (b, x) { if (b.at <= ST.inicio) ib = x; }); if (ib > 0) bs = bs.slice(ib); }
     return bs.slice(-12);
   }
   var evoCarregando = false;
@@ -493,6 +495,14 @@
       }
       if (bi === bases.length - 1) pts.push({ t: Math.max(agora, ini), v: Q - j, n: 0, Q: Q, agora: true });
     });
+    var T0 = ST.inicio ? new Date(ST.inicio).getTime() : 0;
+    if (T0 && pts.length && T0 > pts[0].t) {
+      var kk = 0;
+      for (var z = 0; z < pts.length; z++) if (pts[z].t <= T0 && !pts[z].agora) kk = z;
+      var p0 = { t: T0, v: pts[kk].v, n: 0, Q: pts[kk].Q, inicio: true };
+      pts = [p0].concat(pts.slice(kk + 1));
+      eventos = eventos.filter(function (ev) { return ev.t > T0; });
+    }
     return { pts: pts, eventos: eventos };
   }
   function niceRange(lo, hi) {
@@ -685,8 +695,31 @@
   }
   function renderEvo() { if (ST.view === "ind") renderIndicador(); }
   // Aba Indicador: um cartão por filial (02 e 10) com quanto falta bloquear e o gráfico de evolução
+  function renderInicio() {
+    var box = $("indInicio"); if (!box) return;
+    box.textContent = "";
+    var conf = h("div", { cls: "ind-conf", hidden: true });
+    var erro = h("span", { cls: "ind-erro", role: "status" });
+    async function gravar(at) {
+      erro.textContent = "Salvando…";
+      try { await InicioStore.salvar(at); erro.textContent = ""; toast(at ? "Contagem recomeçada a partir de " + dt(at, true) + "." : "A evolução voltou a mostrar desde a primeira medição."); }
+      catch (e) { erro.textContent = "Não consegui salvar: " + ((e && e.message) || e) + "."; }
+    }
+    var recomecar = h("button", { cls: "btn small", type: "button", text: ST.inicio ? "Recomeçar de novo agora" : "Recomeçar a contagem a partir de agora",
+      onclick: function () { conf.hidden = false; recomecar.hidden = true; } });
+    conf.appendChild(h("span", { text: "A evolução das duas empresas passa a começar agora, com o que falta bloquear neste momento, e os bloqueados contam a partir daqui. Nada é apagado: as medições e as marcações continuam guardadas, e dá para voltar a ver desde o começo." }));
+    conf.appendChild(h("span", { cls: "actions" }, [
+      h("button", { cls: "btn small primary", type: "button", text: "Recomeçar agora", onclick: function () { conf.hidden = true; gravar(new Date().toISOString()); } }),
+      h("button", { cls: "btn small", type: "button", text: "Cancelar", onclick: function () { conf.hidden = true; recomecar.hidden = false; } })]));
+    if (ST.inicio) {
+      box.appendChild(h("span", { cls: "ind-desde", text: "Contando desde " + dt(ST.inicio, true) + "." }));
+      box.appendChild(h("button", { cls: "lnk", type: "button", text: "Mostrar desde a primeira medição", onclick: function () { gravar(null); } }));
+    }
+    box.appendChild(recomecar); box.appendChild(conf); box.appendChild(erro);
+  }
   function renderIndicador() {
     var host = $("ind"); if (!host || !ST.cur) return;
+    renderInicio();
     host.textContent = "";
     evoGarantir(evoBases());
     var desenhar = []; // primeiro monta todos os cartões, depois desenha (a largura de cada gráfico só fica certa com os dois na tela)
@@ -702,8 +735,8 @@
       if (r) {
         var num = function (v, l, cls) { return h("div", { cls: "ind-num " + (cls || "") }, [h("b", { cls: "num", text: n(v) }), h("span", { text: l })]); };
         nums.appendChild(num(r.last.v, "faltam bloquear", "main"));
-        var nb = filaDados(e).feitos.length;
-        nums.appendChild(num(nb, nb === 1 ? "bloqueado" : "bloqueados", nb ? "good" : ""));
+        var nb = ST.inicio ? r.feitos : filaDados(e).feitos.length;
+        nums.appendChild(num(nb, (nb === 1 ? "bloqueado" : "bloqueados") + (ST.inicio ? " desde " + dt(ST.inicio).slice(0, 5) : ""), nb ? "good" : ""));
         nums.appendChild(num(r.hojeN, "hoje", r.hojeN ? "good" : ""));
       }
       });
@@ -719,7 +752,7 @@
     var d0 = new Date(); d0.setHours(0, 0, 0, 0);
     R.eventos.forEach(function (ev) { if (ev.antes == null) return; if (ev.inicio > ev.antes) subiu += ev.inicio - ev.antes; else desceu += ev.antes - ev.inicio; });
     pts.forEach(function (p) { feitos += p.n; if (p.t >= d0.getTime()) hojeN += p.n; });
-    notaEl.textContent = "Começou com " + n(first.v) + " em " + dt(first.t) + " · agora faltam " + n(last.v) +
+    notaEl.textContent = (first.inicio ? "Contando desde " + dt(first.t, true) + ": eram " : "Começou com ") + n(first.v) + (first.inicio ? "" : " em " + dt(first.t)) + " · agora faltam " + n(last.v) +
       (last.v !== first.v ? " (" + (last.v < first.v ? "−" : "+") + n(Math.abs(last.v - first.v)) + ")" : "") +
       " · " + n(feitos) + (feitos === 1 ? " marcado no app" : " marcados no app") + (hojeN ? " (" + n(hojeN) + " hoje)" : "") +
       (subiu || desceu ? " · bases novas: " + [subiu ? "+" + n(subiu) + " duplicidades novas" : "", desceu ? "−" + n(desceu) + " que saíram" : ""].filter(Boolean).join(", ") : "") +
@@ -728,7 +761,8 @@
     pts.forEach(function (p) { lo = Math.min(lo, p.v); hi = Math.max(hi, p.v); });
     var rg = niceRange(lo, hi);
     var W = Math.max(280, box.clientWidth || 600), H = 230, Lm = 56, Rm = 16, T = 22, B = 28;
-    var t0 = first.t, t1 = Math.max(last.t, t0 + 3600000), umDia = t1 - t0 < 36 * 3600000;
+    var t0 = first.t, t1 = Math.max(last.t, t0 + 60000), umDia = t1 - t0 < 36 * 3600000, curto = t1 - t0 < 3600000;
+    if (last.agora) last.t = t1; // o valor de agora segue reto até a ponta direita do gráfico
     var px = function (t) { return Lm + (W - Lm - Rm) * (t - t0) / (t1 - t0); };
     var py = function (v) { return T + (H - T - B) * (1 - (v - rg.lo) / (rg.hi - rg.lo)); };
     var svg = s("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img", "aria-label": "Faltam bloquear" });
@@ -747,10 +781,10 @@
       svg.appendChild(s("text", { x: X, y: T - 10, "text-anchor": X < Lm + 40 ? "start" : X > W - Rm - 40 ? "end" : "middle", class: "tick" }, "base " + dt(p.t).slice(0, 5)));
     });
     // eixo do tempo: dias (ou horas, quando tudo cabe em um dia)
-    var nT = Math.max(2, Math.min(7, Math.floor((W - Lm - Rm) / 80)));
+    var nT = curto ? 1 : Math.max(2, Math.min(7, Math.floor((W - Lm - Rm) / 80))); // menos de 1 hora: só o início e "agora"
     for (var q = 0; q <= nT; q++) {
       var tq = t0 + (t1 - t0) * q / nT, dq = new Date(tq);
-      var lab = q === nT ? "agora" : umDia ? dq.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : dq.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+      var lab = q === nT && t1 - last.t < 60000 ? "agora" : umDia ? dq.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : dq.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
       svg.appendChild(s("text", { x: px(tq), y: H - 8, "text-anchor": q === 0 ? "start" : q === nT ? "end" : "middle", class: "tick" }, lab));
     }
     // linha em degraus: o valor vale até o próximo bloqueio
@@ -1246,6 +1280,32 @@
     },
     onde: "neste navegador (envie ao GitHub para todos verem)"
   };
+
+  // Início da contagem da evolução ("Recomeçar a contagem"): dados/inicio.json no repositório, gravado com a chave
+  // do GitHub. Até o site publicar (1 a 2 minutos), vale a cópia guardada neste navegador.
+  var InicioStore = (function () {
+    var CHAVE = "dup:inicio:v1";
+    function local() { try { return JSON.parse(localStorage.getItem(CHAVE) || "null"); } catch (e) { return null; } }
+    function aplicar(at) { ST.inicio = at || null; if (ST.cur && mounted && ST.view === "ind") renderIndicador(); }
+    function start() {
+      fetch("dados/inicio.json?t=" + Date.now(), { cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }).then(function (arq) {
+        var loc = local();
+        if (loc && arq && (arq.gravadoEm || "") >= (loc.gravadoEm || "")) { try { localStorage.removeItem(CHAVE); } catch (e) { /* nada */ } loc = null; }
+        var v = loc || arq;
+        aplicar(v && v.at);
+      });
+    }
+    async function salvar(at) {
+      var e = Marcas.estado();
+      if (!e.conectado || e.fase === "chave") throw new Error("conecte o GitHub (botão Salvar para todos, na aba Bloquear) para recomeçar para todos");
+      var obj = { at: at || null, gravadoEm: new Date().toISOString() };
+      await Marcas.gravarArquivos(function () { return [{ caminho: "dados/inicio.json", texto: JSON.stringify(obj) }]; },
+        at ? "Evolução recomeçada em " + dt(at, true) : "Evolução volta a mostrar desde a primeira medição");
+      try { localStorage.setItem(CHAVE, JSON.stringify(obj)); } catch (x) { /* nada */ }
+      aplicar(obj.at);
+    }
+    return { start: start, salvar: salvar };
+  })();
 
   // ---------- NCM (campo Pos.IPI/NCM da SB1) ----------
   function temNcm() { return !!(ST.cur && ST.cur.D.totals && ST.cur.D.totals.hasNcm); }

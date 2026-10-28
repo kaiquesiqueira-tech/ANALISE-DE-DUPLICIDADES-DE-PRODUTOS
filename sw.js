@@ -2,7 +2,7 @@
 // Sempre busca a versão mais nova na internet; sem conexão, abre a última versão que ficou guardada
 // (telas, scripts e as medições já abertas neste computador).
 "use strict";
-const CACHE = "duplicidade-v12";
+const CACHE = "duplicidade-v14";
 const BASE = [
   "./", "index.html", "manifest.webmanifest", "css/estilo.css",
   "js/simcore.js", "js/xlsxstream.js", "js/analise.js", "js/xlsxwriter.js", "js/armazenamento.js", "js/app.js",

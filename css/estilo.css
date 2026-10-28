@@ -435,3 +435,11 @@ body { margin: 0; }
 /* marcou: a linha sai da lista na hora */
 .frow.saindo { opacity: 0; transform: translateX(28px); transition: opacity .18s ease, transform .18s ease; pointer-events: none; }
 #fila.fila-trava .frow, #fila.fila-trava .fck { pointer-events: none; }
+/* Recomeçar a contagem (aba Indicador) */
+.ind-inicio { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: -4px 0 14px; font-size: 13px; color: var(--ink-2); }
+.ind-inicio .ind-desde { font-weight: 600; color: var(--ink); }
+.ind-inicio button.lnk { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.ind-conf { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; background: var(--warn-bg); border-radius: 10px; padding: 10px 12px; max-width: 900px; }
+.ind-conf .actions { display: inline-flex; gap: 8px; }
+.ind-erro { color: var(--bad); font-weight: 600; }
+.ind-erro:empty { display: none; }
