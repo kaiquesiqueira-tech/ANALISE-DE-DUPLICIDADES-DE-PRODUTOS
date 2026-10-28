@@ -125,7 +125,7 @@ if exist "%RESARQ%" set /p RESUMO=<"%RESARQ%"
 echo.
 echo  ==========================================================
 if "%RES%"=="0" echo    BASE ATUALIZADA E PUBLICADA
-if "%RES%"=="11" echo    DESCRICOES PUBLICADAS - NCM e grupos; a base de produtos nao mudou
+if "%RES%"=="11" echo    TABELAS PUBLICADAS - descricoes e graficos de data; a base de produtos nao mudou
 if "%RES%"=="10" echo    ATENCAO: A BASE NAO FOI ATUALIZADA - nenhuma planilha nova
 if "%RES%"=="12" echo    ATENCAO: A BASE NAO FOI ATUALIZADA - problema nas planilhas
 echo  ==========================================================

@@ -226,9 +226,9 @@ function repararHistorico() {
     process.exitCode = 12;
     return;
   }
-  const extras = [r.ncm ? "tabela de NCM" : "", r.grupos ? "grupos da empresa " + r.grupos.join(" e ") : ""].filter(Boolean);
+  const extras = [r.ncm ? "tabela de NCM" : "", r.grupos ? "grupos da empresa " + r.grupos.join(" e ") : "", r.datas ? "graficos de data da SB1" : ""].filter(Boolean);
   if (r.status === "gravou") { resumo("Medição de " + dataBR(r.doc.at) + (extras.length ? " + " + extras.join(" + ") : "")); process.exitCode = 0; }
-  else if (r.status === "tabelas") { console.log("  Só as tabelas de descrição foram atualizadas (nenhuma medição nova)."); resumo("Atualizado: " + extras.join(" + ")); process.exitCode = 11; }
+  else if (r.status === "tabelas") { console.log("  Só tabelas foram atualizadas (descrições e/ou gráficos de data; nenhuma medição nova)."); resumo("Atualizado: " + extras.join(" + ")); process.exitCode = 11; }
   else { resumo(r.motivo || "Nenhuma planilha nova na pasta planilhas."); process.exitCode = 10; }
 })().catch((e) => {
   console.log("\n  [ERRO] Nada foi publicado:\n  " + (e && e.message ? e.message : e));

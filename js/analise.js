@@ -313,24 +313,6 @@ var DupAnalysis = (function () {
     var prods = [], seen = new Set(), excl = { bloqueados: 0, inativos: 0, semDescricao: 0, repetidos: 0 };
     var inativos = [], seenInat = new Set();
     var descSource = sb1.length ? "SB1" : "SB2";
-    // datas do cadastro por empresa: dia (AAAAMMDD) → [ativos, bloqueados]
-    // inc = DT Referenc. (inclusão); rev = Ult. Revisao só quando é DEPOIS da inclusão (produto alterado depois de cadastrado).
-    // Ult. Revisao igual à inclusão = nunca alterado (nuncaRev); antes da inclusão = data trocada (revAntes).
-    var datas = { v: 2, emp: {} };
-    function contaDatas(d, i, emp, bloq) {
-      var E = datas.emp[emp] || (datas.emp[emp] = { inc: {}, rev: {}, semInc: [0, 0], semRev: [0, 0], nuncaRev: [0, 0], revAntes: [0, 0] });
-      var x = bloq ? 1 : 0, di = d.dtinc ? parseDate(d.dtinc[i]) : "", dr = d.dtrev ? parseDate(d.dtrev[i]) : "", k;
-      if (d.dtinc) {
-        if (!di) E.semInc[x]++;
-        else { k = di.replace(/-/g, ""); (E.inc[k] || (E.inc[k] = [0, 0]))[x]++; }
-      }
-      if (d.dtrev) {
-        if (!dr) E.semRev[x]++;
-        else if (di && dr === di) E.nuncaRev[x]++;
-        else if (di && dr < di) E.revAntes[x]++;
-        else { k = dr.replace(/-/g, ""); (E.rev[k] || (E.rev[k] = [0, 0]))[x]++; }
-      }
-    }
     if (sb1.length) {
       sb1.forEach(function (t) {
         var d = t.data;
@@ -350,7 +332,6 @@ var DupAnalysis = (function () {
             if (bloq) excl.bloqueados++; else excl.inativos++;
             if (!seenInat.has(emp + "|" + cod)) {
               seenInat.add(emp + "|" + cod);
-              contaDatas(d, i, emp, true);
               inativos.push({ emp: emp, cod: cod, desc: String(d.desc[i] == null ? "" : d.desc[i]).trim(),
                 tipo: d.tipo ? String(d.tipo[i]).trim() : "", grupo: d.grupo ? cleanCode(d.grupo[i]) : "",
                 um: d.um ? String(d.um[i]).trim() : "", ucom: d.ucom ? parseDate(d.ucom[i]) : "",
@@ -361,7 +342,6 @@ var DupAnalysis = (function () {
           var key = emp + "|" + cod;
           if (seen.has(key)) { excl.repetidos++; continue; }
           seen.add(key);
-          contaDatas(d, i, emp, false);
           var desc = String(d.desc[i] == null ? "" : d.desc[i]).trim();
           prods.push({ emp: emp, cod: cod, desc: desc, tipo: d.tipo ? String(d.tipo[i]).trim() : "",
             grupo: d.grupo ? cleanCode(d.grupo[i]) : "", um: d.um ? String(d.um[i]).trim() : "",
@@ -470,10 +450,48 @@ var DupAnalysis = (function () {
         hasBlq: sb1.some(function (t) { return t.hasBlq; }), hasAtivo: sb1.some(function (t) { return t.hasAtivo; }),
         hasNcm: sb1.some(function (t) { return t.hasNcm; }) },
       P: P, pairs: pairsOut, I: INAT, pairsI: pairsI,
-      datas: sb1.some(function (t) { return t.hasDatas; }) ? datas : null
+      datas: datasCadastro(sb1)
     };
   }
   function round3(x) { return Math.round(x * 1000) / 1000; }
+  // Datas do cadastro a partir das SB1 (não precisa de SBZ nem de saldo): por empresa, dia (AAAAMMDD) → [ativos, bloqueados].
+  // inc = DT Referenc. (inclusão); rev = Ult. Revisao só quando é DEPOIS da inclusão (produto alterado depois de cadastrado).
+  // Ult. Revisao igual à inclusão = nunca alterado (nuncaRev); antes da inclusão = data trocada (revAntes).
+  function datasCadastro(sb1) {
+    var datas = { v: 2, emp: {} }, visto = new Set(), tem = false;
+    function conta(d, i, emp, bloq) {
+      var E = datas.emp[emp] || (datas.emp[emp] = { inc: {}, rev: {}, semInc: [0, 0], semRev: [0, 0], nuncaRev: [0, 0], revAntes: [0, 0] });
+      var x = bloq ? 1 : 0, di = d.dtinc ? parseDate(d.dtinc[i]) : "", dr = d.dtrev ? parseDate(d.dtrev[i]) : "", k;
+      if (d.dtinc) {
+        if (!di) E.semInc[x]++;
+        else { k = di.replace(/-/g, ""); (E.inc[k] || (E.inc[k] = [0, 0]))[x]++; }
+      }
+      if (d.dtrev) {
+        if (!dr) E.semRev[x]++;
+        else if (di && dr === di) E.nuncaRev[x]++;
+        else if (di && dr < di) E.revAntes[x]++;
+        else { k = dr.replace(/-/g, ""); (E.rev[k] || (E.rev[k] = [0, 0]))[x]++; }
+      }
+    }
+    (sb1 || []).forEach(function (t) {
+      var d = t.data;
+      if (!d || !d.cod || (!d.dtinc && !d.dtrev)) return;
+      tem = true;
+      var ativoVazioBloq = !!d.ativo && d.ativo.some(isActiveYes);
+      for (var i = 0; i < d.cod.length; i++) {
+        var fil = cleanFilial(d.filial ? d.filial[i] : ""), emp = fil ? empOf(fil.length === 1 ? "0" + fil : fil) : "*";
+        if (emp.length === 1) emp = "0" + emp;
+        var cod = cleanCode(d.cod[i]);
+        if (!cod) continue;
+        if (/^\d+$/.test(cod) && cod.length < 9) cod = ("000000000" + cod).slice(-9);
+        if (visto.has(emp + "|" + cod)) continue;
+        visto.add(emp + "|" + cod);
+        var bloq = (d.blq && isBlocked(d.blq[i])) || (d.ativo && (isInactive(d.ativo[i]) || (ativoVazioBloq && normLabel(d.ativo[i]) === "")));
+        conta(d, i, emp, !!bloq);
+      }
+    });
+    return tem ? datas : null;
+  }
   // empresas que aparecem na coluna Filial de uma planilha (para conferir se veio SBZ e Saldo Físico de todas)
   function empresasDaTabela(t) {
     var f = t.data && t.data.filial, vis = {};
@@ -607,7 +625,7 @@ var DupAnalysis = (function () {
     return o;
   }
 
-  return { readTable: readTable, build: build, summarize: summarize, snapshotDoc: snapshotDoc, ncmTabela: ncmTabela,
+  return { readTable: readTable, build: build, datasCadastro: datasCadastro, summarize: summarize, snapshotDoc: snapshotDoc, ncmTabela: ncmTabela,
     normGrupo: normGrupo, grupoTabela: grupoTabela, empresaDoNome: empresaDoNome, gruposDaSB1: gruposDaSB1,
     gruposDaMedicao: gruposDaMedicao, decidirGrupos: decidirGrupos,
     BANDS: BANDS, bandOf: bandOf, SPECS: SPECS, T_MIN: T_MIN };

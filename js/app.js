@@ -91,6 +91,10 @@
     MarkStore.start();
     NcmStore.start();
     GruposStore.start();
+    // gráficos de data: dados/datas.json (gravado pelo PUBLICAR com a SB1 da pasta planilhas)
+    fetch("dados/datas.json", { cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+      if (j && j.emp) { ST.datasArq = j; if (ST.cur && mounted && ST.view === "ind") renderDatas(); }
+    }).catch(function () { /* sem arquivo de datas */ });
     await recarregar();
   }
   async function recarregar() {
@@ -512,7 +516,7 @@
   function dtGuardar() { store("datas", JSON.stringify(DT)); }
   // soma as filiais escolhidas: AAAAMMDD → [ativos, bloqueados]
   function dtSoma(campo) {
-    var de = ST.cur.D.datas, out = {}, sem = [0, 0], nunca = [0, 0], antes = [0, 0], tem = false;
+    var de = dtFonte().d, out = {}, sem = [0, 0], nunca = [0, 0], antes = [0, 0], tem = false;
     if (!de || !de.emp) return null;
     Object.keys(de.emp).forEach(function (e) {
       if (DT.fil !== "all" && DT.fil !== e) return;
@@ -523,6 +527,13 @@
       if (campo === "rev") [["nuncaRev", nunca], ["revAntes", antes]].forEach(function (z) { var v = E[z[0]]; if (v) { z[1][0] += v[0]; z[1][1] += v[1]; if (v[0] || v[1]) tem = true; } });
     });
     return tem ? { m: out, sem: sem, nunca: nunca, antes: antes } : { m: {}, sem: sem, semColuna: true };
+  }
+  // De onde vêm as datas: a SB1 mais nova entre a da base aberta e a do dados/datas.json
+  // (o PUBLICAR grava esse arquivo com a SB1 da pasta planilhas, mesmo sem SBZ e Saldo Físico)
+  function dtFonte() {
+    var D = ST.cur.D, a = D.datas ? { d: D.datas, at: D.at, txt: "SB1 da base de " + dt(D.at, true) } : null, f = ST.datasArq;
+    var b = f && f.emp ? { d: f, at: f.at, txt: "SB1 de " + dt(f.at, true) + (f.arquivo ? " (" + f.arquivo + ")" : "") } : null;
+    return a && b ? (b.at > a.at ? b : a) : a || b || { d: null };
   }
   function dtAnos(somas) {
     var a = {};
@@ -566,7 +577,7 @@
     host.appendChild(panel);
     var somas = DT_CAMPOS.map(function (c) { return dtSoma(c.k); });
     if (!somas[0] && !somas[1]) {
-      panel.appendChild(h("p", { cls: "note", text: "Estes gráficos aparecem a partir da próxima atualização da base: carregue a SB1 (com as colunas DT Referenc. e Ult. Revisao) junto com a SBZ e os saldos, como sempre." }));
+      panel.appendChild(h("p", { cls: "note", text: "Estes gráficos aparecem quando a SB1 (com as colunas DT Referenc. e Ult. Revisao) passar pelo PUBLICAR: coloque a SB1 na pasta planilhas e rode o PUBLICAR — pode ser só a SB1." }));
       return;
     }
     // filtros: filial · ver por · ano · mês
@@ -606,6 +617,8 @@
     if (DT.nivel !== "ano") ctrl.appendChild(h("button", { cls: "btn small", type: "button", text: DT.nivel === "dia" ? "← Meses de " + DT.ano : "← Todos os anos",
       onclick: function () { dtIr(DT.nivel === "dia" ? "mes" : "ano", DT.ano); } }));
     panel.appendChild(ctrl);
+    var fonte = dtFonte();
+    if (fonte.txt) panel.appendChild(h("p", { cls: "note dt-fonte", text: "Dados: " + fonte.txt + "." }));
     var grid = h("div", { cls: "dt-grid" }), desenhar = [];
     panel.appendChild(grid);
     DT_CAMPOS.forEach(function (c, ci) {

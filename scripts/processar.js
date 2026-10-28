@@ -216,7 +216,39 @@ function ultimaProcessada(pasta) {
   return { pasta: ult, arquivos: fs.readdirSync(path.join(proc, ult)) };
 }
 
-// Modo do PUBLICAR. Devolve { status, doc, ncm, grupos, motivo }:
+// Gráficos "Cadastro por data" do site: dados/datas.json sai só da SB1 (DT Referenc. e Ult. Revisao).
+function gravarDatas(sb1, origem) {
+  const datas = DupAnalysis.datasCadastro(sb1);
+  if (!datas) { console.log("  Aviso: a SB1 não tem as colunas DT Referenc. e Ult. Revisao; os gráficos de data não mudaram."); return null; }
+  const obj = Object.assign({ at: new Date().toISOString(), arquivo: sb1.map((t) => path.basename(t.arquivo || t.name)).join(", "), origem: origem || "planilhas" }, datas);
+  const arq = path.join(raiz, "dados", "datas.json");
+  fs.mkdirSync(path.dirname(arq), { recursive: true });
+  fs.writeFileSync(arq, JSON.stringify(obj));
+  let inc = 0;
+  Object.keys(datas.emp).forEach((e) => { const m = datas.emp[e].inc; Object.keys(m).forEach((k) => { inc += m[k][0] + m[k][1]; }); });
+  console.log(`  Gráficos de data (Cadastro por data) atualizados com ${obj.arquivo}${origem && origem !== "planilhas" ? " de " + origem : ""}: ${inc.toLocaleString("pt-BR")} produtos com data de inclusão.`);
+  return obj;
+}
+// Primeira vez (ainda sem dados/datas.json): usa a SB1 da última atualização guardada em planilhas/processadas
+async function datasDaUltimaProcessada(pasta) {
+  if (fs.existsSync(path.join(raiz, "dados", "datas.json"))) return null;
+  const proc = path.join(pasta, "processadas");
+  if (!fs.existsSync(proc)) return null;
+  const subs = fs.readdirSync(proc).filter((f) => { try { return fs.statSync(path.join(proc, f)).isDirectory(); } catch (e) { return false; } }).sort().reverse();
+  for (const sub of subs) {
+    const arqs = fs.readdirSync(path.join(proc, sub)).filter((f) => EXT.test(f) && !f.startsWith("~$")).map((f) => path.join(proc, sub, f));
+    // a SB1 costuma ter "SB1" no nome; lê essas primeiro para não abrir as planilhas de saldo à toa
+    const prov = arqs.filter((a) => /sb1/i.test(path.basename(a)));
+    for (const lote of [prov, arqs.filter((a) => prov.indexOf(a) < 0)]) {
+      if (!lote.length) continue;
+      const sb1 = (await lerPlanilhas(lote)).tabelas.filter((t) => t.kind === "SB1");
+      if (sb1.length) return gravarDatas(sb1, "planilhas/processadas/" + sub);
+    }
+  }
+  return null;
+}
+
+// Modo do PUBLICAR. Devolve { status, doc, ncm, grupos, datas, motivo }:
 //   status "gravou" (medição nova), "tabelas" (só tabela de NCM e/ou de grupos) ou "vazio" (nada para processar).
 // Lança erro (nada é gravado) se as planilhas tiverem problema.
 async function processarPasta(pasta) {
@@ -235,7 +267,8 @@ async function processarPasta(pasta) {
     console.log("  " + motivo);
     console.log(`  Pasta conferida: ${pasta}`);
     if (ult) console.log(`  Última atualização processada: planilhas/processadas/${ult.pasta}/ (${ult.arquivos.join(", ")})`);
-    return { status: "vazio", motivo };
+    const datas = await datasDaUltimaProcessada(pasta);
+    return { status: datas ? "tabelas" : "vazio", motivo, datas };
   }
   const presos = arquivos.filter((a) => !arquivoLivre(a));
   if (presos.length) throw new Error("Feche no Excel: " + presos.map((a) => path.basename(a)).join(", ") + ". Depois rode o PUBLICAR de novo.");
@@ -244,16 +277,21 @@ async function processarPasta(pasta) {
     throw new Error("Nenhuma das planilhas da pasta foi reconhecida (" + falhas.join(", ") + "). Confira se são as exportações SB1, SBZ e Saldo Físico do Protheus, com a linha de títulos das colunas.");
   }
   const ncmTabs = tabelas.filter((t) => t.kind === "NCM"), grpTabs = tabelas.filter((t) => t.kind === "GRP");
-  const med = tabelas.filter((t) => t.kind !== "NCM" && t.kind !== "GRP");
+  let med = tabelas.filter((t) => t.kind !== "NCM" && t.kind !== "GRP");
+  // Só a SB1 na pasta (sem SBZ e sem Saldo Físico): atualiza só os gráficos de data, sem medição nova
+  const soSb1 = med.length > 0 && med.every((t) => t.kind === "SB1");
+  const sb1 = med.filter((t) => t.kind === "SB1");
+  if (soSb1) { console.log("  Só a SB1 na pasta: atualizo os gráficos de data; para uma medição nova, coloque também a SBZ e o Saldo Físico."); med = []; }
   if (med.length) {
     const problemas = conferir(med);
     if (problemas.length) throw new Error(problemas.join("\n  "));
   }
-  const dg = grpTabs.length ? decidirGrupos(grpTabs, med) : null;
+  const dg = grpTabs.length ? decidirGrupos(grpTabs, med.length ? med : sb1) : null;
   if (dg && dg.erros.length) throw new Error(dg.erros.join("\n  "));
   if (falhas.length) console.log(`  Aviso: ${falhas.join(", ")} não ${falhas.length > 1 ? "foram reconhecidos e ficaram" : "foi reconhecido e ficou"} na pasta.`);
-  let ncm = null, doc = null, grupos = null;
+  let ncm = null, doc = null, grupos = null, datas = null;
   if (ncmTabs.length) ncm = gravarTabelaNcm(ncmTabs);
+  if (sb1.length) datas = gravarDatas(sb1);
   if (dg) { gravarTabelaGrupos(dg.tabelas); grupos = Object.keys(dg.tabelas).sort(); }
   if (med.length) doc = await gravarMedicao(med);
   const destino = path.join(path.resolve(pasta), "processadas", carimbo());
@@ -270,10 +308,10 @@ async function processarPasta(pasta) {
   // subpasta que ficou vazia sai também
   Array.from(subpastas).sort((a, b) => b.length - a.length).forEach((d) => { try { if (!fs.readdirSync(d).length) fs.rmdirSync(d); } catch (e) { /* fica */ } });
   console.log(`  Planilhas guardadas em ${rel(destino)}/`);
-  return { status: med.length ? "gravou" : "tabelas", doc, ncm, grupos };
+  return { status: med.length ? "gravou" : "tabelas", doc, ncm, grupos, datas };
 }
 
-module.exports = { processarPasta, listarArquivos, lerPlanilhas, conferir, gravarMedicao, gravarTabelaNcm, gravarTabelaGrupos, dataBR };
+module.exports = { processarPasta, listarArquivos, lerPlanilhas, conferir, gravarMedicao, gravarTabelaNcm, gravarTabelaGrupos, gravarDatas, dataBR };
 
 if (require.main === module) {
   (async () => {
@@ -294,6 +332,9 @@ if (require.main === module) {
       gravarTabelaGrupos(dg.tabelas);
     }
     if (!tabelas.length && (ncmTabs.length || grpTabs.length)) return;
+    const sb1 = tabelas.filter((t) => t.kind === "SB1");
+    if (sb1.length) gravarDatas(sb1);
+    if (sb1.length && sb1.length === tabelas.length) { console.log("Só a SB1: atualizei os gráficos de data; medição nova precisa também da SBZ e do Saldo Físico."); return; }
     const tipos = new Set(tabelas.map((t) => t.kind));
     if (!tipos.has("SB1") && !tipos.has("SB2")) { console.log("Preciso ao menos da SB1 (ou do Saldo Físico). Nada foi gravado."); process.exit(1); }
     conferir(tabelas).forEach((p) => console.log("Aviso: " + p));
