@@ -18,6 +18,8 @@ var DupAnalysis = (function () {
       um: ["unidade", "b1_um"], ucom: ["ult. compra", "b1_ucom"],
       blq: ["bloqueado", "blq. de tela", "blq.de tela", "b1_msblql", "bloqueio", "bloqueado?"],
       ativo: ["ativo", "b1_ativo", "ativo?"],
+      dtinc: ["dt referenc.", "dt referenc", "dt referencia", "dt. referencia", "data referencia", "data de referencia", "b1_datref"],
+      dtrev: ["ult. revisao", "ult revisao", "ult.revisao", "ultima revisao", "b1_urev"],
       ncm: ["pos.ipi/ncm", "pos. ipi/ncm", "pos.ipi / ncm", "b1_posipi", "ncm", "cod. ncm", "codigo ncm"] } },
     SBZ: { label: "SBZ · Indicadores (ponto de pedido)", need: ["cod", "pp"], cols: {
       filial: ["filial", "bz_filial"], cod: ["codigo", "bz_cod", "produto"], pp: ["ponto pedido", "bz_emin"] } },
@@ -97,10 +99,14 @@ var DupAnalysis = (function () {
     var s = normLabel(v);
     return s === "1" || s === "sim" || s === "s" || s === "bloqueado" || s === "true";
   }
-  // B1_ATIVO = N (não ativo) também conta como bloqueado. Vazio = ativo.
+  // B1_ATIVO = N (não ativo) conta como bloqueado. Vazio também, quando a coluna está preenchida (tem "S" nos ativos).
   function isInactive(v) {
     var s = normLabel(v);
     return s === "n" || s === "nao" || s === "2" || s === "false" || s === "inativo";
+  }
+  function isActiveYes(v) {
+    var s = normLabel(v);
+    return s === "s" || s === "sim" || s === "1" || s === "true" || s === "ativo";
   }
 
   // Reads one file; returns {kind, label, name, rows, data}
@@ -148,7 +154,8 @@ var DupAnalysis = (function () {
     await XlsxStream.read(blob, name, visitor, onProgress);
     if (!kind) return { kind: null, name: name, rows: 0, error: "Não reconheci esta planilha (esperava SB1, SBZ, SB2/Saldo físico ou a tabela de NCM)." };
     return { kind: kind, label: SPECS[kind].label, name: name, rows: rows, data: data,
-      hasBlq: kind === "SB1" && map.blq >= 0, hasAtivo: kind === "SB1" && map.ativo >= 0, hasNcm: kind === "SB1" && map.ncm >= 0 };
+      hasBlq: kind === "SB1" && map.blq >= 0, hasAtivo: kind === "SB1" && map.ativo >= 0, hasNcm: kind === "SB1" && map.ncm >= 0,
+      hasDatas: kind === "SB1" && (map.dtinc >= 0 || map.dtrev >= 0) };
   }
 
   // Tabela de NCM (mata010): código 0000.00.00 → descrição. A linha sem Ex-NCM tem preferência.
@@ -306,9 +313,23 @@ var DupAnalysis = (function () {
     var prods = [], seen = new Set(), excl = { bloqueados: 0, inativos: 0, semDescricao: 0, repetidos: 0 };
     var inativos = [], seenInat = new Set();
     var descSource = sb1.length ? "SB1" : "SB2";
+    // datas do cadastro por empresa: dia (AAAAMMDD) → [ativos, bloqueados]
+    var datas = { emp: {} };
+    function contaData(emp, v, campo, bloq) {
+      var E = datas.emp[emp] || (datas.emp[emp] = { inc: {}, rev: {}, semInc: [0, 0], semRev: [0, 0] });
+      var dd = parseDate(v), x = bloq ? 1 : 0;
+      if (!dd) { E[campo === "inc" ? "semInc" : "semRev"][x]++; return; }
+      var k = dd.replace(/-/g, ""), m = E[campo];
+      (m[k] || (m[k] = [0, 0]))[x]++;
+    }
+    function contaDatas(d, i, emp, bloq) {
+      if (d.dtinc) contaData(emp, d.dtinc[i], "inc", bloq);
+      if (d.dtrev) contaData(emp, d.dtrev[i], "rev", bloq);
+    }
     if (sb1.length) {
       sb1.forEach(function (t) {
         var d = t.data;
+        var ativoVazioBloq = !!d.ativo && d.ativo.some(isActiveYes);
         for (var i = 0; i < d.cod.length; i++) {
           var fil = cleanFilial(d.filial ? d.filial[i] : ""), emp = fil ? empOf(fil.length === 1 ? "0" + fil : fil) : "*";
           if (emp.length === 1) emp = "0" + emp;
@@ -318,21 +339,24 @@ var DupAnalysis = (function () {
             var c9 = ("000000000" + cod).slice(-9), c8 = ("00000000" + cod).slice(-8);
             if (ks && ks.has(cod)) { /* keep */ } else if (ks && ks.has(c9)) cod = c9; else if (ks && ks.has(c8)) cod = c8; else cod = c9;
           }
-          var bloq = d.blq && isBlocked(d.blq[i]), inat = d.ativo && isInactive(d.ativo[i]);
+          var bloq = d.blq && isBlocked(d.blq[i]), vazio = ativoVazioBloq && normLabel(d.ativo[i]) === "";
+          var inat = d.ativo && (isInactive(d.ativo[i]) || vazio);
           if (bloq || inat) {
             if (bloq) excl.bloqueados++; else excl.inativos++;
             if (!seenInat.has(emp + "|" + cod)) {
               seenInat.add(emp + "|" + cod);
+              contaDatas(d, i, emp, true);
               inativos.push({ emp: emp, cod: cod, desc: String(d.desc[i] == null ? "" : d.desc[i]).trim(),
                 tipo: d.tipo ? String(d.tipo[i]).trim() : "", grupo: d.grupo ? cleanCode(d.grupo[i]) : "",
                 um: d.um ? String(d.um[i]).trim() : "", ucom: d.ucom ? parseDate(d.ucom[i]) : "",
-                motivo: bloq ? "Bloqueado" : "Ativo = N", ncm: d.ncm ? cleanNcm(d.ncm[i]) : "" });
+                motivo: bloq ? "Bloqueado" : vazio ? "Ativo vazio" : "Ativo = N", ncm: d.ncm ? cleanNcm(d.ncm[i]) : "" });
             }
             continue;
           }
           var key = emp + "|" + cod;
           if (seen.has(key)) { excl.repetidos++; continue; }
           seen.add(key);
+          contaDatas(d, i, emp, false);
           var desc = String(d.desc[i] == null ? "" : d.desc[i]).trim();
           prods.push({ emp: emp, cod: cod, desc: desc, tipo: d.tipo ? String(d.tipo[i]).trim() : "",
             grupo: d.grupo ? cleanCode(d.grupo[i]) : "", um: d.um ? String(d.um[i]).trim() : "",
@@ -371,8 +395,15 @@ var DupAnalysis = (function () {
     });
 
     // similarity per empresa
-    var pairsOut = [], inPair = new Map();
+    var pairsOut = [], pairsI = [], inPair = new Map();
     function pidx(i) { var x = inPair.get(i); if (x == null) { x = inPair.size; inPair.set(i, x); } return x; }
+    // índice >= 0: produto ativo (prods); < 0: bloqueado (inativos[-i - 1])
+    function par(x, y, sc) {
+      if (x >= 0 && y >= 0) pairsOut.push(pidx(x), pidx(y), sc);
+      else if (x >= 0) pairsI.push(-y - 1, pidx(x), sc);
+      else if (y >= 0) pairsI.push(-x - 1, pidx(y), sc);
+    }
+    inativos.forEach(function (p) { p.norm = SimCore.normalize(p.desc); });
     for (var e = 0; e < empresas.length; e++) {
       var emp = empresas[e];
       var groups = new Map();
@@ -382,10 +413,16 @@ var DupAnalysis = (function () {
         if (!g) { g = []; groups.set(p.norm, g); }
         g.push(i);
       });
+      inativos.forEach(function (p, j) {
+        if (p.emp !== emp || !p.norm) return;
+        var g = groups.get(p.norm);
+        if (!g) { g = []; groups.set(p.norm, g); }
+        g.push(-j - 1);
+      });
       var uniq = Array.from(groups.keys()), members = uniq.map(function (u) { return groups.get(u); });
       onStep("Comparando descrições · empresa " + emp + " (" + uniq.length.toLocaleString("pt-BR") + " descrições)", 0);
       members.forEach(function (g) {
-        for (var a = 0; a < g.length; a++) for (var b = a + 1; b < g.length; b++) pairsOut.push(pidx(g[a]), pidx(g[b]), 100);
+        for (var a = 0; a < g.length; a++) for (var b = a + 1; b < g.length; b++) par(g[a], g[b], 100);
       });
       var res = await runJoin(uniq, T_MIN, function (f) { onStep(null, f); });
       var refs = uniq.map(SimCore.refTokens);
@@ -394,7 +431,7 @@ var DupAnalysis = (function () {
         var sc = Math.floor(res.s[k] * SimCore.refFactor(refs[ua], refs[ub]) + 1e-9);
         if (sc < T_MIN) continue;
         var ga = members[ua], gb = members[ub];
-        for (var x = 0; x < ga.length; x++) for (var y = 0; y < gb.length; y++) pairsOut.push(pidx(ga[x]), pidx(gb[y]), sc);
+        for (var x = 0; x < ga.length; x++) for (var y = 0; y < gb.length; y++) par(ga[x], gb[y], sc);
       }
     }
     onStep("Organizando resultado");
@@ -427,7 +464,8 @@ var DupAnalysis = (function () {
       totals: { prodPorEmp: prodPorEmp, prodPorFilial: prodPorFilial, excl: excl,
         hasBlq: sb1.some(function (t) { return t.hasBlq; }), hasAtivo: sb1.some(function (t) { return t.hasAtivo; }),
         hasNcm: sb1.some(function (t) { return t.hasNcm; }) },
-      P: P, pairs: pairsOut, I: INAT
+      P: P, pairs: pairsOut, I: INAT, pairsI: pairsI,
+      datas: sb1.some(function (t) { return t.hasDatas; }) ? datas : null
     };
   }
   function round3(x) { return Math.round(x * 1000) / 1000; }
